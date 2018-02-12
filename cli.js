@@ -199,7 +199,7 @@ async function transferDemo() {
     }
   }, {
       test: async () => new Promise(resolve => setTimeout(() => { console.log("TESTING"); resolve(2) }, 2000)),
-      // next: async () => createCli({ prompt: "SubCmd:", isSubCmd: true, supCmd: root }).prompt(),
+      next: async () => createCli({ prompt: "SubCmd:", isSubCmd: true, supCmd: root }).prompt(),
       gah: async (accountId) => await daemon.Apis.instance().history_api().exec("get_account_history", [accountId, 100]),
       block: getPrintFn(getBlocks)
     });

@@ -251,10 +251,11 @@ async function transferDemo() {
   }
   // let account = (await daemon.Apis.instance().db_api().exec("get_accounts", [["1.2.28018"]]))[0].name;
   // console.log("Account: ", account)  
-
+  const ID_START = 27964;
+  const ID_END = 29968;
   let res = [];
   try {
-    for (let i = 28264; i < 28265; i++) {
+    for (let i = ID_START; i < ID_END; i++) {
       try {
         let one = await getValue("1.2." + i);
         res.push(one);
