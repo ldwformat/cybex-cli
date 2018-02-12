@@ -1,0 +1,10 @@
+{
+  "name": "cybex-daemon",
+  "version": "1.0.0",
+  "main": "CybexDaemon.js",
+  "license": "MIT",
+  "dependencies": {
+    "cybexjs": "^1.0.15",
+    "lodash": "^4.17.4"
+  }
+}
