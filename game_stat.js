@@ -1,6 +1,8 @@
 const { CybexDaemon, KEY_MODE } = require("./CybexDaemon");
 const { EVENT_ON_NEW_HISTORY } = require("./constants");
-const { TransactionBuilder } = require("cybexjs");
+const { TransactionBuilder,PrivateKey } = require("cybexjs");
+const { pseudoRandomBytes } = require("crypto");
+
 
 const fs = require("fs");
 const path = require("path");
@@ -129,48 +131,48 @@ async function transferDemo() {
 
   // }
 
-  // async function tryLimit() {
-  //   let tr = new TransactionBuilder();
-  //   await daemon.updateAuthForOp(["active"])
-  //   let expiration = new Date();
-  //   expiration.setSeconds(expiration.getSeconds() + 120)
-  //   let limit = {
-  //     fee: {
-  //       asset_id: "1.3.0",
-  //       amount: 0
-  //     },
-  //     seller: daemon.daemonAccountInfo.get("id"),
-  //     amount_to_sell: {
-  //       asset_id: "1.3.0",
-  //       amount: 1500000 + getRendom() / 3
-  //     },
-  //     min_to_receive: {
-  //       asset_id: "1.3.1",
-  //       amount: 150000
-  //     },
-  //     expiration,
-  //     fill_or_kill: false,
-  //   }
-  //   let limitSell = {
-  //     fee: {
-  //       asset_id: "1.3.0",
-  //       amount: 0
-  //     },
-  //     seller: daemon.daemonAccountInfo.get("id"),
-  //     amount_to_sell: {
-  //       asset_id: "1.3.1",
-  //       amount: 100000
-  //     },
-  //     min_to_receive: {
-  //       asset_id: "1.3.0",
-  //       amount: 700000 + getRendom()
-  //     },
-  //     expiration,
-  //     fill_or_kill: false,
-  //   }
-  //   let transfer_op = await tr.get_type_operation("limit_order_create", Math.random() >= 0.5 ? limitSell : limit);
-  //   await daemon.performTransaction(tr, transfer_op);
-  // }
+  async function tryLimit() {
+    let tr = new TransactionBuilder();
+    await daemon.updateAuthForOp(["active"])
+    let expiration = new Date();
+    expiration.setSeconds(expiration.getSeconds() + 120)
+    let limit = {
+      fee: {
+        asset_id: "1.3.0",
+        amount: 0
+      },
+      seller: daemon.daemonAccountInfo.get("id"),
+      amount_to_sell: {
+        asset_id: "1.3.0",
+        amount: 1500000 + getRendom() / 3
+      },
+      min_to_receive: {
+        asset_id: "1.3.1",
+        amount: 150000
+      },
+      expiration,
+      fill_or_kill: false,
+    }
+    let limitSell = {
+      fee: {
+        asset_id: "1.3.0",
+        amount: 0
+      },
+      seller: daemon.daemonAccountInfo.get("id"),
+      amount_to_sell: {
+        asset_id: "1.3.1",
+        amount: 100000
+      },
+      min_to_receive: {
+        asset_id: "1.3.0",
+        amount: 700000 + getRendom()
+      },
+      expiration,
+      fill_or_kill: false,
+    }
+    let transfer_op = await tr.get_type_operation("limit_order_create", Math.random() >= 0.5 ? limitSell : limit);
+    await daemon.performTransaction(tr, transfer_op);
+  }
 
 
   // EVENT_ON_NEW_HISTORY 发出代表该账号监听到一次区块变更，并取到了守护账号的最新信息。
@@ -204,7 +206,7 @@ async function transferDemo() {
         incomes[amount.asset_id] = 0;
       }
       if (to === accountId) {
-        incomes[amount.asset_id] += amount.amount;
+        incomes[amount.asset_id] += (parseInt(amount.amount) || 0);
       }
     })
     // console.log("Incomes: ", incomes);
@@ -218,28 +220,44 @@ async function transferDemo() {
 
   async function getAccountBalance(accountId, incomes) {
     let bals = await daemon.Apis.instance().db_api().exec("get_account_balances", [accountId, []]);
+    let limits = (await daemon.Apis.instance().db_api().exec("get_full_accounts", [[accountId], false]))[0][1]["limit_orders"];
+    limits = limits.map(limit => (limit["sell_price"]["base"])).reduce((limits, limit) => {
+      if (limit.asset_id in limits) {
+        limits[limit.asset_id] += limit.amount
+      } else {
+        limits[limit.asset_id] = limit.amount
+      }
+      return limits;
+    }, {});
+    // console.log("Incomes: ", incomes);
+    // console.log("limits: ", limits);
+    // console.log("Bals Before: ", bals);
     bals = bals.filter(bal => bal.asset_id in rate).map(bal => ({
-      amount: bal.amount - (incomes[bal.asset_id] || 0),
+      amount: parseInt(bal.amount) + (limits[bal.asset_id] || 0) - (incomes[bal.asset_id] || 0),
       asset_id: bal.asset_id
     }));
+    // console.log("Bals: ", bals);
     return bals;
   }
   const rate = {
     "1.3.664": 1,
-    "1.3.659": 8019,
-    "1.3.662": 144.75,
-    "1.3.660": 806.96,
-    "1.3.663": 1.2,
-    "1.3.661": 1272,
+    "1.3.659": 8861.5,
+    "1.3.662": 152.50,
+    "1.3.660": 820.67,
+    "1.3.663": 3.58,
+    "1.3.661": 1209,
   };
 
   async function getValue(accountId) {
     let incomes = await getOneAccount(accountId);
+    console.log("Incomes: ", incomes);
     let bals = (await getAccountBalance(accountId, incomes)).map(bal => ({
       value: bal.amount * rate[bal.asset_id],
       ...bal
     }));
-    let account = (await daemon.Apis.instance().db_api().exec("get_accounts", [[accountId]]))[0].name;
+    let accountInfo = (await daemon.Apis.instance().db_api().exec("get_accounts", [[accountId], false]))[0]
+    let account = accountInfo.name;
+    // console.log("Account: ", accountInfo);
     let value = bals.reduce((acc, next) => acc + next.value, 0) / 10000;
     return {
       accountId,
@@ -251,28 +269,101 @@ async function transferDemo() {
   }
   // let account = (await daemon.Apis.instance().db_api().exec("get_accounts", [["1.2.28018"]]))[0].name;
   // console.log("Account: ", account)  
-  const ID_START = 27964;
+  const ID_START = 27957;
+  // const ID_START = 29938;
   const ID_END = 29968;
-  let res = [];
-  try {
-    for (let i = ID_START; i < ID_END; i++) {
-      try {
-        let one = await getValue("1.2." + i);
-        res.push(one);
-      } catch (e) {
-        throw Error(i);
+  // const ID_END = 27959;
+  // const ID_START = 27990;
+  // const ID_END = 27991;
+  async function stat() {
+    let res = [];
+    try {
+      for (let i = ID_START; i < ID_END; i++) {
+        try {
+          let one = await getValue("1.2." + i);
+          res.push(one);
+        } catch (e) {
+          throw Error(i);
+        }
+        console.log("Got ", i);
       }
-      console.log("Got ", i);
+    } catch (e) {
+      console.log("broke on ", i);
     }
-  } catch (e) {
-    console.log("broke on ", i);
+    // fs.writeFile(path.resolve(__dirname, "./result_raw.json"), JSON.stringify(res));
+
+    let result = res.sort((a, b) => b.value - a.value);
+
+    fs.writeFile(path.resolve(__dirname, "./result.json"), JSON.stringify(result), e => console.log("DONE"));
   }
-  // fs.writeFile(path.resolve(__dirname, "./result_raw.json"), JSON.stringify(res));
 
-  let result = res.sort((a, b) => b.value - a.value);
+  async function genCode() {
+    let ids = [];
+    for (let id = ID_START; id < ID_END; id++) {
+      ids.push("1.2." + id);
+    }
+    let accounts =
+      (await daemon.Apis.instance().db_api().exec("get_accounts", [ids]));
+    accounts = accounts.map(account => ({
+      id: account.id,
+      name: account.name,
+      code: "XN" + PrivateKey.fromSeed(account.name + pseudoRandomBytes(6).toString()).toPublicKey().toPublicKeyString().substr(3)
+    }))
+    fs.writeFileSync("./nx.json", JSON.stringify(accounts));
+    // console.log("accounts: ", accounts);
+  }
+  // await genCode();
 
-  fs.writeFile(path.resolve(__dirname, "./result.json"), JSON.stringify(result), e => console.log("DONE"));
 
+  async function compare() {
+    let winners = require("./final.json");
+    let xn = require("./nx.json");
+    winners = winners.map(w => w[0]);
+    console.log("XN: ", xn.length, winners.length);
+    xn = xn.filter(xn => (winners.indexOf(xn.name) === -1));
+    console.log("XN After: ", xn.length);    
+    fs.writeFileSync("./xn_final.json", JSON.stringify(xn))
+  }
+
+  // compare();
+
+  async function genCodeForGit() {
+    let users = ["ekuro",
+    "lilianwen",
+    "hokyoDan",
+    "lli003",
+    "RickyShiJs",
+    "logerror",
+    "btcball",
+    "lin871383567",
+    "belie0515",
+    "Zhenghu198602",
+    "xiachu3344",
+    "btctime",
+    "ssstudy",
+    "yu8424921",
+    "joeygou",
+    "JeromeLoo",
+    "yoyow2018",
+    "fishnchipsj",
+    "lestatmq",
+    "huyong007",
+    "wonder-all",
+    "kxk007",
+    "apple077498532",
+    "kleen888",
+    "askyhui",
+    "Zhenghu198602",
+    "melody321go",
+    "doss-feng",
+    "overturner",
+    "CybexDex"];
+
+    let res = users.map(name => "CYBEX" + PrivateKey.fromSeed(name + pseudoRandomBytes(6).toString()).toPublicKey().toPublicKeyString().substr(3));
+    fs.writeFileSync("./github.json", JSON.stringify(res));
+  }
+
+  genCodeForGit()
   // let root = createCli({
   //   prompt: "Cybex>"
   // }, {
@@ -282,5 +373,18 @@ async function transferDemo() {
   //   });
   // root.prompt();
 }
+async function allRecords() {
+  let daemon = new CybexDaemon(
+    NODE_URL,
+    DAEMON_USER,
+    DAEMON_PASSWORD,
+    // KEY_MODE.WIF
+  );
+  await daemon.init(); // 配置守护链接的初始化
+  let r = await getAccountFullHistory("1.2.27990", 100, daemon)
 
+  console.log("Records: ", r);
+}
+
+// allRecords()
 transferDemo();

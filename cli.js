@@ -1,15 +1,18 @@
+const { pseudoRandomBytes } = require("crypto");
+
 const { CybexDaemon, KEY_MODE } = require("./CybexDaemon");
 const { EVENT_ON_NEW_HISTORY } = require("./constants");
-const { TransactionBuilder } = require("cybexjs");
+const { TransactionBuilder, PrivateKey } = require("cybexjs");
 const { execSync } = require("child_process");
 const { inspect } = require("util");
+const { genKeysFromSeed, getTransferOpWithMemo, filterHistoryByOp } = require("./utils");
 const fs = require("fs");
 const path = require("path");
-
 const readline = require("readline");
+const demo = require("./demo")
+const moment = require("moment");
 
-const NODE_URL = "wss://hangzhou.51nebula.com/";
-// const NODE_URL = "ws://121.40.95.24:8090";
+const NODE_URL = "wss://shenzhen.51nebula.com/";
 const DAEMON_USER = "jade-gateway";
 const DAEMON_PASSWORD = "qwer1234qwer1234";
 
@@ -22,12 +25,16 @@ function splitCmd(cmdLine) {
   return [cmd, ...args] = cmdLine.match(cmdRex)[1].split(" ");
 }
 
-function createCli({ prompt, context = { daemon: null }, notDefaultCmd = false, isSubCmd = false, supCmd }, customCmds = {}) {
+async function createCli({ prompt, context = { daemon: null }, notDefaultCmd = false, isSubCmd = false, supCmd }, customCmds = {}) {
   const DEFAULT_CMDS = {
+    test: () => {
+      console.log("Test: ", 1);
+    },
     exit: () => {
       if (!isSubCmd) {
         return process.exit(0)
       }
+      supCmd.resume();
       return supCmd.prompt();
     }
   };
@@ -35,19 +42,20 @@ function createCli({ prompt, context = { daemon: null }, notDefaultCmd = false, 
     ...customCmds,
     ...DEFAULT_CMDS
   };
-  if (isSubCmd) {
-    if (!supCmd) {
-      throw Error("Not set approperate super cmd module");
-    }
-    supCmd.close();
-  }
-
   let cli = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
     prompt
   });
-  console.log("Pro: ");
+  if (isSubCmd) {
+    if (!supCmd) {
+      throw Error("Not set approperate super cmd module");
+    }
+    supCmd.close();
+  } else {
+    context.cli = cli;
+    // console.log("Context: ", context);
+  }
 
   cli.on("line", async line => {
     if (!line) {
@@ -60,19 +68,25 @@ function createCli({ prompt, context = { daemon: null }, notDefaultCmd = false, 
       console.error("Command not found: ", cmd);
       return cli.prompt();
     }
-    await impl.apply(context, args);
+    impl = impl.bind(context);
+    await impl(...args);
     if (isSubCmd) {
       cli.close();
       return supCmd.prompt();
+    } else {
+      cli.prompt();
     }
-    return cli.prompt();
   });
-
-  return cli;
+  cli.on("SIGINT", () => {
+    cli.close();
+    console.log("\nBye~~");
+    process.exit()
+  });
+  return cli.prompt(true);
 }
 
 async function getAccountFullHistory(accountId, numOfRecord, daemon) {
-  let res = await daemon.Apis.instance().history_api().exec("get_account_history", ["1.2.27965", "1.11.0", numOfRecord, "1.11.0"]);
+  let res = await daemon.Apis.instance().history_api().exec("get_account_history", [accountId, "1.11.0", numOfRecord, "1.11.0"]);
   // let history = await daemon.Apis.instance().history_api().exec("get_account_history", ["1.2.27965", "1.11.0", 5, "1.11.4908018"]);
   if (res.length < numOfRecord) {
     return res;
@@ -80,10 +94,27 @@ async function getAccountFullHistory(accountId, numOfRecord, daemon) {
   let then;
   do {
     let lastId = parseInt(res[res.length - 1].id.split(".")[2]) - 1;
-    then = await daemon.Apis.instance().history_api().exec("get_account_history", ["1.2.27965", "1.11.0", numOfRecord, "1.11." + lastId]);
+    then = await daemon.Apis.instance().history_api().exec("get_account_history", [accountId, "1.11.0", numOfRecord, "1.11." + lastId]);
     res = [...res, ...then];
   } while (then.length)
   return res;
+}
+
+async function getObject(id = "1.1.1") {
+  console.log(`Get object ${id}`);
+  return await this.daemon.Apis.instance().db_api().exec("get_objects", [[id]]);
+}
+
+let blocks = {};
+
+async function getBlock(blockNum, { daemon } = this) {
+  if (!blocks[blockNum]) {
+    blocks[blockNum] = {
+      ...(await daemon.Apis.instance().db_api().exec("get_block", [blockNum])),
+      blockNum
+    };
+  }
+  return blocks[blockNum];
 }
 
 async function getBlocks(start, numOfBlock = 1) {
@@ -94,8 +125,22 @@ async function getBlocks(start, numOfBlock = 1) {
   numOfBlock = parseInt(numOfBlock);
   let numArray = (new Array(numOfBlock)).fill(1).map((v, i) => (parseInt(start) + i));
   let pArray = numArray.map(blockNum => this.daemon.Apis.instance().db_api().exec("get_block", [blockNum]));
-  return await Promise.all(pArray);
+  let bs = await Promise.all(pArray);
+  return bs;
 }
+
+async function getGlobalDynamic() {
+  let dynamicGlobalObject = await this.daemon.Apis.instance().db_api().exec("get_dynamic_global_properties", []);
+  return dynamicGlobalObject;
+}
+
+async function getAccountInfo(accountId, { daemon } = this) {
+  if (!accountId) {
+    throw Error("Account id must be provided");
+  }
+  return (await daemon.Apis.instance().db_api().exec("get_accounts", [[accountId]]))[0];
+}
+
 
 function getPrintFn(fn, splitter = "--") {
   return async function (...args) {
@@ -113,12 +158,12 @@ function getPrintFn(fn, splitter = "--") {
         console.log(res);
       }
     } catch (e) {
-      console.error("Error: ", e.message);
+      console.error("Error: ", e);
     }
   }
 }
 
-async function transferDemo() {
+async function main() {
   // 新建一个守护账号
   let daemon = new CybexDaemon(
     NODE_URL,
@@ -126,7 +171,10 @@ async function transferDemo() {
     DAEMON_PASSWORD,
     // KEY_MODE.WIF
   );
-  await daemon.init(); // 配置守护链接的初始化
+  console.log("Daemon Created");
+  // await daemon.init(); // 配置守护链接的初始化
+  daemon.init(); // 配置守护链接的初始化
+  console.log("Daemon Setup");
 
 
   // daemon.performTransfer(transferObj);
@@ -134,7 +182,7 @@ async function transferDemo() {
   async function getOneAccount(accountId) {
     let incomes = {};
 
-    let history = await getAccountFullHistory(accountId, 2, daemon);
+    let history = await getAccountFullHistory(accountId, 50, daemon);
     let transferOps = history.filter(tx => {
       return tx.op[0] === 0;
     }).map(tx => {
@@ -156,6 +204,24 @@ async function transferDemo() {
     return incomes;
   }
 
+  async function getAccountHistory(accountId) {
+    let { daemon } = this;
+    let history = await getAccountFullHistory(accountId, 50, daemon);
+    return {
+      size: history.length,
+      history
+    };
+  }
+
+  async function getFillOrder(base = "1.3.0", quote = "1.3.1", { daemon } = this) {
+    return await daemon.Apis.instance().history_api().exec("get_fill_order_history", [base, quote, 1]);
+  }
+  async function getTradeHistory(base = "1.3.0", quote = "1.3.1", { daemon } = this) {
+    let start = new Date().toISOString();
+    let stop = new Date(Date.now() - 3600 * 1000).toISOString();
+    return await daemon.Apis.instance().db_api().exec("get_trade_history", [base, quote, "2018-03-15T10:26:27", "2018-02-01T10:26:27", 100]);
+  }
+
   async function getAccountBalance(accountId, incomes) {
     let bals = await daemon.Apis.instance().db_api().exec("get_account_balances", [accountId, []]);
     bals = bals.filter(bal => bal.asset_id in rate).map(bal => ({
@@ -173,6 +239,52 @@ async function transferDemo() {
     "1.3.661": 1272,
   };
 
+  async function createAccount(accountName, seed) {
+    let { daemon } = this;
+    return await createAccountImpl(accountName, seed);
+  }
+
+  async function createAccountImpl(name, seed, { accounts = null, weightBase = 1 } = {}, daemonInstance = daemon) {
+    let { pubKeys } = genKeysFromSeed(seed);
+    let account_auths = accounts && accounts.map(name => [name, weightBase]) || [];
+    let createParams = {
+      fee: {
+        amount: 0,
+        asset_id: 0
+      },
+      registrar: daemonInstance.daemonAccountInfo.get("id"),
+      referrer: daemonInstance.daemonAccountInfo.get("id"),
+      "referrer_percent": 0,
+      "name": name,
+      "owner": {
+        "weight_threshold": account_auths.length * weightBase || 1,
+        account_auths,
+        "key_auths": [
+          [pubKeys.owner, 1]
+        ],
+        "address_auths": []
+      },
+      "active": {
+        "weight_threshold": account_auths.length * weightBase || 1,
+        account_auths,
+        "key_auths": [
+          [pubKeys.active, 1]
+        ],
+        "address_auths": []
+      },
+      "options": {
+        "memo_key": pubKeys.owner,
+        "voting_account": "1.2.5",
+        "num_witness": 0,
+        "num_committee": 0,
+        "votes": []
+      }
+    };
+    let tr = new TransactionBuilder();
+    let op = tr.get_type_operation("account_create", createParams);
+    return await daemonInstance.performTransaction(tr, op);
+  }
+
   async function getValue(accountId) {
     let incomes = await getOneAccount(accountId);
     let bals = (await getAccountBalance(accountId, incomes)).map(bal => ({
@@ -189,26 +301,298 @@ async function transferDemo() {
       value
     }
   }
+
+  async function transfer(account, value, memo) {
+    let { daemon } = this;
+    let to_account = (await daemon.getAccountByName(account))["id"];
+    let tx = {
+      to_account,
+      amount: value * 100000,
+      asset: "1.3.0",
+      memo
+    };
+    return await daemon.performTransfer(tx);
+  }
+
+  const MEMOS = [
+    "SJInPuvqG",
+    "S18gu_vcM",
+    "Hk9tj88qG",
+    "HyiosLI9G",
+  ]
+  async function testImpl(counter, amount = 60000) {
+    let { daemon } = this;
+    let tx = {
+      to_account: "1.2.28030",
+      amount: amount + counter,
+      asset: "1.3.0",
+      memo: MEMOS[Math.floor(Math.random() * MEMOS.length)]
+    };
+    return await daemon.performTransfer(tx);
+  }
+  async function testGateway(amount = 100, interval = 200) {
+    let counter = 1
+    let starter = Date.now();
+    let doTest = testImpl.bind(this);
+    (function doOnce(counter) {
+      doTest(counter)
+        // sendPrizeImpl(id, 66, `Prize`)
+        .then((res) => console.log(`No.${counter} done`))
+        .catch(err => {
+          console.error("Failed: ", err);
+        });
+      if (counter < amount) {
+        setTimeout(() => {
+          doOnce(counter + 1)
+        }, interval);
+      } else {
+        let duration = (Date.now() - starter) / 1000;
+        console.log("Total: ", duration);
+      }
+    }(counter));
+  }
+
+  async function genPub(accountName, seed) {
+    const role = ["active", "owner"];
+    const res = role.map(r => {
+      const s = `${accountName}${r}${seed}`
+      console.log("Now Seed: ", s);
+      let privKey = PrivateKey.fromSeed(s);
+      let pubKey = privKey.toPublicKey().toPublicKeyString();
+      return pubKey;
+    });
+    return res;
+  }
+
+  async function getDB(apiName, ...args) {
+    let { daemon } = this;
+    return await daemon.Apis.instance().db_api().exec(apiName, [...args]);
+  }
+
+  let assets = {};
+  async function getValueFromAmount({ asset_id, amount }, { daemon } = this) {
+    if (!assets[asset_id]) {
+      assets[asset_id] = (await daemon.Apis.instance().db_api().exec("get_assets", [[asset_id]]))[0];
+    }
+    let asset = assets[asset_id];
+    let { precision } = asset;
+    return amount / Math.pow(10, precision);
+  }
+  async function getAssetName({ asset_id }, { daemon } = this) {
+    if (!assets[asset_id]) {
+      assets[asset_id] = (await daemon.Apis.instance().db_api().exec("get_assets", [[asset_id]]))[0];
+    }
+    let asset = assets[asset_id];
+    return asset.symbol;
+  }
+
+  async function translateTransfer(transfer, { daemon } = this) {
+    let { fee, from, to, amount, memoContent, blockNum } = transfer;
+    let block = await getBlock(blockNum, this);
+    return {
+      time: moment.utc(block.timestamp).toString(),
+      blockNum: block.blockNum,
+      from: (await getAccountInfo(from, { daemon })).name,
+      to: (await getAccountInfo(to, { daemon })).name,
+      fee: {
+        value: await getValueFromAmount(fee, { daemon }),
+        asset: await getAssetName(fee, this)
+      },
+      amount: {
+        value: await getValueFromAmount(amount, { daemon }),
+        asset: await getAssetName(amount, this)
+      },
+      memoContent
+    };
+  }
+
+  async function statAccountTransfer(accountId, { daemon } = this) {
+    let history = await getAccountHistory.call(this, accountId);
+    let transfers = await filterHistoryByOp.call(this, history.history, 0);
+    let transfersWithMemo = transfers.map(transfer =>
+      getTransferOpWithMemo.call(this, transfer, [daemon.privKey, daemon.privKeys.owner])
+    );
+    let res = await Promise.all(
+      transfersWithMemo.map(async transfer =>
+        await (translateTransfer.call(this, transfer))
+      )
+    );
+    return res;
+  }
+
+  function txFilterForRegStat(blocks) {
+    return blocks.filter(block => block.transactions.length)
+      .map(block => ({
+        timestamp: block.timestamp,
+        users:
+          block.transactions.filter(tx =>
+            tx.operations[0][0] === 5
+          ).map(tx => ({
+            name: tx.operations[0][1].name,
+            id: tx.operation_results[0][1],
+          }))
+      }))
+      .filter(tx => tx.users.length);
+  }
+  async function statRegister(_startBlock = 1, _endBlock) {
+    let startBlock = parseInt(_startBlock);
+    let endBlock = parseInt(_endBlock) || (await getGlobalDynamic.bind(this)()).last_irreversible_block_num + 1;
+    let numOfBlocks = endBlock - startBlock;
+    let regTxs = [];
+    // For Memory
+
+    while (startBlock <= endBlock) {
+      let blocknumOfZone = Math.min(endBlock - startBlock, 5000);
+      console.log(`Stat ${blocknumOfZone} Blocks From ${startBlock}`);
+      if (!blocknumOfZone) break;
+      let blocks = await getBlocks.bind(this)(startBlock, blocknumOfZone);
+      // console.log("BLOCK:", blocks);
+      blocks = txFilterForRegStat(blocks);
+      fs.writeFileSync("./register_stat.json", JSON.stringify(blocks), {
+        flag: "a+"
+      });
+
+      // regTxs = regTxs.concat();
+      startBlock += blocknumOfZone;
+    }
+
+    return regTxs;
+  }
+
+  async function sendCode() {
+    let nx = require("./xn_final.json");
+    let names = [{ name: "owner6", code: "sadfasdf" }, { name: "owner5", code: "12sdfa" }];
+    let failedNames = [];
+    let counter = 0
+    let starter = Date.now();
+    let doTransfer = transfer.bind(this);
+    (function doOnce(counter) {
+      let { name, code } = nx[counter];
+      doTransfer(name, 2, `Award Code: ${code}`)
+        .then((res) => console.log(`No.${counter} ${name} done`))
+        .catch(err => {
+          console.error("Failed: ", err);
+          failedNames.push(nx[counter]);
+          fs.writeFile("./failed.json", JSON.stringify(failedNames));
+        });
+      if (counter + 1 < nx.length) {
+        setTimeout(() => {
+          doOnce(counter + 1)
+        }, 200);
+      } else {
+        let duration = (Date.now() - starter) / 1000;
+        console.log("Total: ", duration);
+      }
+    }(counter));
+    return true;
+  }
+  async function sendCodeWinner() {
+    let nx = require("./final.json");
+    let names = [{ name: "owner6", code: "sadfasdf" }, { name: "owner5", code: "12sdfa" }];
+    let failedNames = [];
+    let counter = 0
+    let starter = Date.now();
+    let doTransfer = transfer.bind(this);
+    (function doOnce(counter) {
+      let [name, value, awards, code] = nx[counter];
+      doTransfer(name, 2, `Prize Code: ${code}`)
+        .then((res) => console.log(`No.${counter} ${name} done`))
+        .catch(err => {
+          console.error("Failed: ", err);
+          failedNames.push(nx[counter]);
+          fs.writeFile("./failed.json", JSON.stringify(failedNames));
+        });
+      if (counter + 1 < nx.length) {
+        setTimeout(() => {
+          doOnce(counter + 1)
+        }, 200);
+      } else {
+        let duration = (Date.now() - starter) / 1000;
+        console.log("Total: ", duration);
+      }
+    }(counter));
+    return true;
+  }
   // let account = (await daemon.Apis.instance().db_api().exec("get_accounts", [["1.2.28018"]]))[0].name;
   // console.log("Account: ", account)  
+  async function stat(accountId) {
+    return await statWhiteList((await (getAccountHistory.bind(this))(accountId)).history);
+  }
 
-  let root = createCli({
+  async function statWhiteList(txs) {
+    let ops = txs.filter(tx => tx.op[0] === 0).map(tx => tx.op[1]);
+    let codeOps = ops.filter(op => op.amount.amount === 1);
+    let sendOps = ops.filter(op => op.amount.amount === 30000000);
+    return {
+      verifyCode: {
+        size: codeOps.length,
+        record: codeOps
+      },
+      sendCoin: {
+        size: sendOps.length,
+        record: sendOps
+      },
+    }
+  }
+
+  async function initDaemon() {
+    let { daemon } = this;
+    return daemon.init();
+  }
+
+  async function findAccounts() {
+    let { daemon } = this;
+    let ids = [];
+    for (let winner of winners) {
+      let [name, code] = winner;
+      let n = await daemon.getAccountByName(name);
+      console.log("Winner: ", name, ":", n && n.id, code)
+      if (!n) {
+        console.error("Null: ", name, code);
+      } else {
+        ids.push(n.id);
+      }
+    }
+    return ids;
+  }
+
+  let root = await createCli({
     prompt: "Cybex>",
     context: {
       daemon
     }
   }, {
-      test: async () => new Promise(resolve => setTimeout(() => { console.log("TESTING"); resolve(2) }, 2000)),
-      next: async () => createCli({ prompt: "SubCmd:", isSubCmd: true, supCmd: root }).prompt(),
-      gah: async (accountId) => await daemon.Apis.instance().history_api().exec("get_account_history", [accountId, 100]),
-      block: getPrintFn(getBlocks)
+      // Explorer
+      "get-account": getPrintFn(getAccountInfo),
+      "gah": getPrintFn(getAccountHistory),
+      "show-agent": getPrintFn(function () { return this.daemon.daemonAccountInfo }),
+      "block": getPrintFn(getBlocks),
+      "get": getPrintFn(getObject),
+      // Transactions
+      "create-account": getPrintFn(createAccount),
+      "transfer": getPrintFn(transfer),
+      "ggd": getPrintFn(getGlobalDynamic),
+      "init": getPrintFn(initDaemon),
+      "fill": getPrintFn(getFillOrder),
+      "trade": getPrintFn(getTradeHistory),
+      "gen-key": ``,
+      // Temp
+      // "code": getPrintFn(genCode),
+      // "test-code": getPrintFn(testCode),
+      // "fix-code": getPrintFn(fixCode),
+      // "send-code": getPrintFn(sendCodeWinner),
+      "stat": getPrintFn(stat),
+      "fa": getPrintFn(findAccounts),
+      // "send-prize": getPrintFn(sendPrize),
+      "gen-pub": getPrintFn(genPub),
+      "get-db": getPrintFn(getDB),
+      "test-gateway": getPrintFn(testGateway),
+      "stat-account": getPrintFn(statAccountTransfer),
+      "stat-register": getPrintFn(statRegister),
+      // "test-pub": getPrintFn(demo.keyTest),
     });
-  root.on("SIGINT", () => {
-    root.close();
-    console.log("\nBye~~");
-    process.exit()
-  });
-  root.prompt();
+
+  // root.prompt();
 }
 
-transferDemo();
+main().catch(err => console.error(err));

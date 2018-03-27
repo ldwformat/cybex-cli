@@ -20,22 +20,7 @@ class CybexDaemon extends events.EventEmitter {
         this.daemonUser = daemonUser;
         this.daemonPassword = daemonPassword;
         this.mode = mode;
-        switch (mode) {
-            case KEY_MODE.PASSWORD:
-                let res = cybexjs_1.Login.generateKeys(daemonUser, daemonPassword);
-                this.privKeys = res.privKeys;
-                this.pubKeys = res.pubKeys;
-                break;
-            case KEY_MODE.WIF:
-                let { privKeys, pubKeys } = utils_1.genKeysFromWif(daemonPassword);
-                this.privKeys = privKeys;
-                this.pubKeys = pubKeys;
-                break;
-        }
-        this.keyMap = {};
-        for (let role in this.pubKeys) {
-            this.keyMap[this.pubKeys[role]] = this.privKeys[role];
-        }
+
         // this.addresses = pubKeys["active"].toAdd
         this.history = [];
         this.listenDaemonAccount = this.listenDaemonAccount.bind(this);
@@ -52,26 +37,48 @@ class CybexDaemon extends events.EventEmitter {
      * @memberof CybexDaemon
      */
     async init() {
+        let starter = Date.now();
         let { nodeAddress } = this;
         try {
             let instanceRes = await cybexjs_ws_1.Apis.instance(nodeAddress, true).init_promise;
         }
         catch (e) {
+            console.error(e);
             process.exit(1);
         }
         this.Apis = cybexjs_ws_1.Apis;
         console.log("connected to:", nodeAddress);
         await cybexjs_1.ChainStore.init();
         this.daemonAccountInfo = await cybexjs_1.FetchChain("getAccount", this.daemonUser);
-        try {
-            cybexjs_1.ChainStore.unsubscribe(this.listenDaemonAccount);
-        }
-        catch (e) { }
+        console.log("");
+        // try {
+        //     cybexjs_1.ChainStore.unsubscribe(this.listenDaemonAccount);
+        // }
+        // catch (e) { }
         cybexjs_1.ChainStore.subscribe(this.listenDaemonAccount);
         cybexjs_ws_1.Apis.instance().ws_rpc.ws.on("close", async (e) => {
             console.error("Ws connection has been broken. Reconnect to ws server");
             await this.init();
         });
+        ///
+        switch (this.mode) {
+            case KEY_MODE.PASSWORD:
+                let res = cybexjs_1.Login.generateKeys(this.daemonUser, this.daemonPassword);
+                this.privKeys = res.privKeys;
+                this.pubKeys = res.pubKeys;
+                break;
+            case KEY_MODE.WIF:
+                let { privKeys, pubKeys } = utils_1.genKeysFromWif(this.daemonPassword);
+                this.privKeys = privKeys;
+                this.pubKeys = pubKeys;
+                break;
+        }
+        this.keyMap = {};
+        for (let role in this.pubKeys) {
+            this.keyMap[this.pubKeys[role]] = this.privKeys[role];
+        }
+        /// 
+        console.log("Init Done: ", Date.now() - starter + "ms");
         this.listenDaemonAccount();
     }
     async listenDaemonAccount() {
@@ -99,7 +106,7 @@ class CybexDaemon extends events.EventEmitter {
         return await this.Apis.instance().db_api().exec("get_accounts", [ids]);
     }
     async getAccountHistory(id) {
-        return await this.Apis.instance().db_api().exec("account_id_type", [id, ]);
+        return await this.Apis.instance().db_api().exec("account_id_type", [id,]);
     }
     /**
      * 实现一次Transfer操作
@@ -116,12 +123,24 @@ class CybexDaemon extends events.EventEmitter {
         // 建立一个用于转账操作的Tranaction, 并配置操作/费用/签名
         let tr = new cybexjs_1.TransactionBuilder();
         let transfer_op = tr.get_type_operation("transfer", await utils_1.buildTransfer(transferObj, this.keyMap));
-        try {
-            return await this.performTransaction(tr, transfer_op);
-        }
-        catch (e) {
-            console.error("Tranfer Error: ", e);
-        }
+        return await this.performTransaction(tr, transfer_op);
+        // let retry = 0;
+        // let _this;
+        // return await (async function p() {
+        //     try {
+        //         return await _this.performTransaction(tr, transfer_op);
+        //     }
+        //     catch (e) {
+        //         if (retry++ === 0) {
+        //             console.log("First Try Failed, Try Again");
+        //             await _this.init();
+        //             return p();
+        //         } else {
+        //             console.error("Tranfer Error: ", e);
+        //             throw e;
+        //         }
+        //     }
+        // }());
     }
     async performTransaction(tr, op, loginInstance = cybexjs_1.Login) {
         try {
@@ -135,14 +154,21 @@ class CybexDaemon extends events.EventEmitter {
             else {
                 tr.add_signer(this.privKey);
             }
-            // tr.broadcast();
-            let serialized = await tr.finalize();
-            console.log(":", serialized);
-            return serialized;
+            let retry = 0;
+            try {
+                return await tr.broadcast();
+            } catch (e) {
+                if (retry++ === 0) {
+                    await this.init();
+                    return await tr.broadcast();
+                } else {
+                    return e;
+                }
+            }
         }
         catch (e) {
             await this.init();
-            // console.error("PERFORM ERROR 1: ", e);
+            console.error("PERFORM ERROR 1: ", e);
             throw new Error(e);
         }
     }
