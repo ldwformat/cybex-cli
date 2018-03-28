@@ -12,8 +12,9 @@ const readline = require("readline");
 const demo = require("./demo")
 const moment = require("moment");
 
+// const NODE_URL = "wss://shanghai.51nebula.com/";
 const NODE_URL = "wss://shenzhen.51nebula.com/";
-const DAEMON_USER = "jade-gateway";
+const DAEMON_USER = "create-test21";
 const DAEMON_PASSWORD = "qwer1234qwer1234";
 
 function getRendom() {
