@@ -1,8 +1,0 @@
-[ { id: '1.7.2903',
-    expiration: '2023-03-26T13:45:26',
-    seller: '1.2.1722',
-    for_sale: 4628706,
-    sell_price: 
-     { base: { amount: 4628706, asset_id: '1.3.2' },
-       quote: { amount: 925741230, asset_id: '1.3.0' } },
-    deferred_fee: 55 } ]
