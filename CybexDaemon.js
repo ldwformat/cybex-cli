@@ -79,6 +79,7 @@ class CybexDaemon extends events.EventEmitter {
         }
         /// 
         console.log("Init Done: ", Date.now() - starter + "ms");
+        this.updateAuthForOp(["active"]);
         this.listenDaemonAccount();
     }
     async listenDaemonAccount() {

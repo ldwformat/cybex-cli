@@ -29,7 +29,7 @@ const NODE_URL = isTest
   ? "wss://shenzhen.51nebula.com/"
   : "wss://shanghai.51nebula.com/";
 // const DAEMON_USER = "init0";
-const DAEMON_USER = isTest ? "jade-gateway" : "create-test20";
+const DAEMON_USER = isTest ? "binary-test" : "create-test20";
 const DAEMON_PASSWORD = "qwer1234qwer1234";
 const WITHDRAW_MEMO_PATTERN = new RegExp(
   `^withdraw\:${"CybexGatewayDev"}\:(eth|btc|eos|usdt|bat|ven|omg|snt|nas|knc|pay|eng)\:(.*)$`,
@@ -329,12 +329,12 @@ async function main() {
       };
     }
   }
-  const feedPrice = async function(_asset, price) {
+  const feedPrice = async function(_asset, baseAmount, quoteAmount) {
     let asset = (await getAsset(_asset))[0];
     console.log("Asset: ", asset, daemon.daemonAccountInfo.get("id"));
-    let base = 5;
+    let price = quoteAmount / baseAmount;
     price = price * Math.pow(10, asset.precision) / Math.pow(10, 5);
-    let denominator = 5;
+    let denominator = 1;
     let numerator = Math.round(price * denominator);
     let price_feed = {
       settlement_price: {
@@ -434,6 +434,55 @@ async function main() {
         ...bal
       }));
     return validBals;
+  }
+  // update feed
+  async function updateFeedProducer(_asset, producer) {
+    let { daemon } = this;
+    let asset = (await getAsset(_asset))[0];
+    console.log("Issuer: ", daemon.daemonAccountInfo.get("id"));
+    let feed = {
+      fee: {
+        asset_id: "1.3.0",
+        amount: 0
+      },
+      issuer: daemon.daemonAccountInfo.get("id"),
+      new_feed_producers: [daemon.daemonAccountInfo.get("id")],
+      asset_to_update: asset.id,
+      extensions: []
+    };
+
+    let tr = new TransactionBuilder();
+    let op = tr.get_type_operation("asset_update_feed_producers", feed);
+    return await daemon.performTransaction(tr, op);
+  }
+  // update feed
+  async function settleAsset(_asset, base, quote) {
+    let { daemon } = this;
+    let asset = (await getAsset(_asset))[0];
+    console.log("Issuer: ", daemon.daemonAccountInfo.get("id"));
+    let feed = {
+      fee: {
+        asset_id: "1.3.0",
+        amount: 0
+      },
+      issuer: daemon.daemonAccountInfo.get("id"),
+      settle_price: {
+        base: {
+          asset_id: asset.id,
+          amount: base
+        },
+        quote: {
+          asset_id: "1.3.0",
+          amount: quote
+        }
+      },
+      asset_to_settle: asset.id,
+      extensions: []
+    };
+
+    let tr = new TransactionBuilder();
+    let op = tr.get_type_operation("asset_global_settle", feed);
+    return await daemon.performTransaction(tr, op);
   }
 
   async function createAccount(accountName, seed) {
@@ -856,8 +905,10 @@ async function main() {
     "stat-account": getPrintFn(statAccountTransfer),
     "stat-register": getPrintFn(statRegister),
     "stat-limit": getPrintFn(statLimit),
+    "update-feed-producer": getPrintFn(updateFeedProducer),
     "feed-price": getPrintFn(feedPrice),
-    sell: getPrintFn(sellAsset),
+    "settle-asset": getPrintFn(settleAsset),
+    "sell": getPrintFn(sellAsset),
     "read-wallet": getPrintFn(readWallet)
     // "test-pub": getPrintFn(demo.keyTest),
   };
