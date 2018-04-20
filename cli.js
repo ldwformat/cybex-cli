@@ -4,6 +4,7 @@ const { CybexDaemon, KEY_MODE } = require("./CybexDaemon");
 const { EVENT_ON_NEW_HISTORY } = require("./constants");
 const { TransactionBuilder, PrivateKey, ChainTypes } = require("cybexjs");
 const { execSync } = require("child_process");
+const moment = require("moment");
 const { inspect } = require("util");
 const {
   genKeysFromSeed,
@@ -15,22 +16,26 @@ const fs = require("fs");
 const path = require("path");
 const readline = require("readline");
 const demo = require("./demo");
-const moment = require("moment");
 const stream = require("stream");
 const { sell } = require("./limit-order");
 const { getWalletReader } = require("./wallet");
+const createCommittee = require("./plugins/create-committee");
 
 const orderLimits = require("./plugins/top-limit");
+const findWhoHas = require("./plugins/find-who-has");
 
 const argv = process.argv;
+
 const isTest = argv.some(arg => arg === "--test");
 
 const NODE_URL = isTest
   ? "wss://shenzhen.51nebula.com/"
   : "wss://shanghai.51nebula.com/";
 // const DAEMON_USER = "init0";
-const DAEMON_USER = isTest ? "binary-test" : "create-test20";
+// const DAEMON_USER = isTest ? "binary-test" : "cybex-service-a";
+const DAEMON_USER = isTest ? "bit-test" : "create-test20";
 const DAEMON_PASSWORD = "qwer1234qwer1234";
+// const DAEMON_PASSWORD = "Cybex20180106";
 const WITHDRAW_MEMO_PATTERN = new RegExp(
   `^withdraw\:${"CybexGatewayDev"}\:(eth|btc|eos|usdt|bat|ven|omg|snt|nas|knc|pay|eng)\:(.*)$`,
   "i"
@@ -41,6 +46,10 @@ const DEPOSIT_MEMO_PATTERN = new RegExp(
 );
 
 const logger = console;
+
+///////////
+
+///////////
 
 function getRendom() {
   return Math.floor(Math.random() * 3000) + 30000;
@@ -59,7 +68,7 @@ const getCompleter = commandsArray => line => {
 async function createCli(
   {
     prompt,
-    context = { daemon: null },
+    context = { daemon: null, cmds: {} },
     notDefaultCmd = false,
     isSubCmd = false,
     supCmd
@@ -98,6 +107,10 @@ async function createCli(
   } else {
     context.cli = cli;
     // console.log("Context: ", context);
+  }
+
+  for (let cmd in context.cmds) {
+    context.cmds[cmd] = context.cmds[cmd].bind(context);
   }
 
   cli.on("line", async line => {
@@ -196,13 +209,22 @@ async function getGlobalDynamic() {
   return dynamicGlobalObject;
 }
 
-async function getAccountInfo(accountId, { daemon } = this) {
-  if (!accountId) {
-    throw Error("Account id must be provided");
+const isId = str => /[12]\..+\..+/.test(str);
+
+async function getAccountInfo(accountIdOrName, { daemon } = this) {
+  if (!accountIdOrName) {
+    throw Error("Account id/name must be provided");
   }
-  return (await daemon.Apis.instance()
+  return isId(accountIdOrName)
+    ? (await daemon.Apis.instance()
+        .db_api()
+        .exec("get_accounts", [[accountIdOrName]]))[0]
+    : await daemon.getAccountByName(accountIdOrName);
+}
+async function getAccountFullInfo(...ids) {
+  return await daemon.Apis.instance()
     .db_api()
-    .exec("get_accounts", [[accountId]]))[0];
+    .exec("get_full_accounts", [ids, false]);
 }
 
 function getPrintFn(fn, splitter = "--") {
@@ -232,13 +254,14 @@ function getPrintFn(fn, splitter = "--") {
 }
 
 async function main() {
+  getPrintFn = getPrintFn.bind(this);
   // 新建一个守护账号
-  let daemon = new CybexDaemon(
+  let daemon = (this.daemon = new CybexDaemon(
     NODE_URL,
     DAEMON_USER,
     DAEMON_PASSWORD
     // KEY_MODE.WIF
-  );
+  ));
   console.log("Daemon Created");
   // await daemon.init(); // 配置守护链接的初始化
   daemon.init(); // 配置守护链接的初始化
@@ -388,19 +411,98 @@ async function main() {
     };
   }
 
+  async function patchSellerNameIntoOrders(orders) {
+    return await Promise.all(
+      orders.map(async order => {
+        order.seller_name = (await getAccountInfo.bind(this)(
+          order.seller
+        )).name;
+        return order;
+      })
+    );
+  }
+
   async function topBuyLimits(quoteAsset, baseAsset, limit = 100) {
     let limits = await getLimitOrder.bind(this)(quoteAsset, baseAsset);
-    return (await orderLimits(limits, false)).slice(0, limit);
+    let buyOrders = (await orderLimits(limits, false)).slice(0, limit);
+    return await patchSellerNameIntoOrders(buyOrders);
   }
   async function topSellLimits(quoteAsset, baseAsset, limit = 100) {
     let limits = await getLimitOrder.bind(this)(quoteAsset, baseAsset);
-    return (await orderLimits(limits, true, false)).slice(0, limit);
+    return await patchSellerNameIntoOrders(
+      (await orderLimits(limits, true, false)).slice(0, limit)
+    );
   }
 
-  async function getAccountBalance(accountName) {
+  async function getAccountBalance(nameOrId, ...assets) {
+    assert(nameOrId, "An account's name or id must be provided");
+    // console.log("Assets To Find: ", assets, assets[0]);
+    if (assets.length && !isId(assets[0])) {
+      assets = (await getAsset(...assets)).map(asset => asset.id);
+      // console.log("Asset To Find: ", assets);
+    }
+    if (!isId(nameOrId)) {
+      return await getAccountBalanceByAccountName(nameOrId, assets);
+    } else {
+      return await getAccountBalanceByAccountId(nameOrId, assets);
+    }
+  }
+
+  const tshirt = require("./dinner/TshirtSeller");
+  const dinner = require("./dinner/DinnerSeller");
+  const james = require("./dinner/James");
+
+  async function sanitize() {
+    let sellers = [...tshirt, ...dinner].map(sell => {
+      let sellAsset = sell.sell_price.base;
+      // if (sellAsset.asset_id === "1.3.14")
+      return {
+        id: sell.seller,
+        bal: [
+          {
+            asset_id: sellAsset.asset_id,
+            amount: sellAsset.amount
+          }
+        ]
+      };
+    });
+    let after = [...james, ...sellers];
+    after = after.map(entry => ({
+      ...entry,
+      val: entry.bal.reduce(
+        (all, bal) => ({ ...all, [bal.asset_id]: bal.amount }),
+        {}
+      )
+    }));
+    // return after;
+    let res = after.reduce((all, entry) => {
+      if (all[entry.id]) {
+        for (let asset in entry.val) {
+          if (all[entry.id][asset]) {
+            all[entry.id][asset] += entry.val[asset];
+          } else {
+            all[entry.id][asset] = entry.val[asset];
+          }
+        }
+      } else {
+        all[entry.id] = entry.val;
+      }
+      return all;
+    }, {});
+    return res;
+  }
+
+  async function getAccountBalanceByAccountId(accountId, assets = []) {
     let bals = await daemon.Apis.instance()
       .db_api()
-      .exec("get_named_account_balances", [accountName, []]);
+      .exec("get_account_balances", [accountId, assets]);
+    return bals;
+  }
+
+  async function getAccountBalanceByAccountName(accountName, assets = []) {
+    let bals = await daemon.Apis.instance()
+      .db_api()
+      .exec("get_named_account_balances", [accountName, assets]);
     return bals;
   }
 
@@ -552,16 +654,32 @@ async function main() {
     };
   }
 
-  async function transfer(account, value, memo) {
+  async function transfer(account, value, memo, asset = "1.3.0") {
     let { daemon } = this;
-    let to_account = (await daemon.getAccountByName(account))["id"];
+    let to_account;
+    if (!isId(account)) {
+      to_account = (await daemon.getAccountByName(account))["id"];
+    } else {
+      to_account = account;
+    }
     let tx = {
       to_account,
       amount: value * 100000,
-      asset: "1.3.0",
+      asset,
       memo
     };
     return await daemon.performTransfer(tx);
+  }
+
+  async function verifyAccountExist(file) {
+    let list = require(file);
+    assert(list && list.length);
+    let res = await Promise.all(list.map(l => getAccountByName(l)));
+    return res;
+
+    // let notExist = [];
+    // res.forEach((one, index) => (one.result == null ? notExist.push[res[index]["name"]] : 0));
+    // return notExist.length ? notExist : "All Currect!";
   }
 
   const MEMOS = ["SJInPuvqG", "S18gu_vcM", "Hk9tj88qG", "HyiosLI9G"];
@@ -637,6 +755,10 @@ async function main() {
     return asset.symbol;
   }
 
+  async function getAccountByName(accountName) {
+    return await this.daemon.getAccountByName(accountName);
+  }
+
   async function translateTransfer(transfer, { daemon } = this) {
     let { fee, from, to, amount, memoContent, blockNum } = transfer;
     let block = await getBlock(blockNum, this);
@@ -657,7 +779,37 @@ async function main() {
     };
   }
 
-  async function statAccountTransfer(accountId, { daemon } = this) {
+  function genCode(size = 1, codeLength = 12) {
+    let res = [];
+    for (let i = 0; i < size; i++) {
+      res.push(
+        PrivateKey.fromSeed(
+          Math.floor(Math.random() * Math.pow(10, codeLength)).toString()
+        )
+          .toPublicKey()
+          .toPublicKeyString()
+          .slice(0, codeLength)
+      );
+    }
+    return res;
+  }
+
+  function genAddress(seed) {
+    assert(seed && seed.length > 12);
+    let pub = PrivateKey.fromSeed(seed).toPublicKey();
+    return {
+      pubkey: pub.toPublicKeyString(),
+      address: pub.toAddressString()
+    };
+  }
+
+  async function statAccountTransfer(account, { daemon } = this) {
+    let accountId;
+    if (!isId(account)) {
+      accountId = (await daemon.getAccountByName(account))["id"];
+    } else {
+      accountId = account;
+    }
     let history = await getAccountHistory.call(this, accountId);
     let transfers = await filterHistoryByOp.call(this, history.history, 0);
     let transfersWithMemo = transfers.map(transfer =>
@@ -708,6 +860,17 @@ async function main() {
       }))
       .filter(tx => tx.users.length);
   }
+
+  async function removeDetails(file) {
+    assert(file);
+    let records = require(file);
+    console.log("Record:", records);
+    for (let record of records) {
+      delete record.details;
+    }
+    return records;
+  }
+
   async function statRegister(_startBlock = 1, _endBlock) {
     let startBlock = parseInt(_startBlock);
     let endBlock =
@@ -794,26 +957,35 @@ async function main() {
     })(counter);
     return true;
   }
+
   async function sendCodeWinner() {
-    let nx = require("./final.json");
-    let names = [
-      { name: "owner6", code: "sadfasdf" },
-      { name: "owner5", code: "12sdfa" }
-    ];
+    // let res = require("./dinner/res.json");
+    // let list = ["earth"];
+    let list = require("./inputs/meetup.json");
+
+    // let res = { "1.2.7": { "1.3.14": 0, "1.3.15": 6 } };
+    // let list = Object.keys(res);
+    let s = "1.3.0";
+    // let list = ["earth"];
     let failedNames = [];
     let counter = 0;
     let starter = Date.now();
     let doTransfer = transfer.bind(this);
     (function doOnce(counter) {
-      let [name, value, awards, code] = nx[counter];
-      doTransfer(name, 2, `Prize Code: ${code}`)
+      let name = list[counter];
+      doTransfer(
+        name,
+        100,
+        `感谢各位对CYBEX的支持！承诺各位的100个CYB现已如数发放，请注意查收`,
+        "1.3.0"
+      )
         .then(res => console.log(`No.${counter} ${name} done`))
         .catch(err => {
           console.error("Failed: ", err);
-          failedNames.push(nx[counter]);
+          failedNames.push(list[counter]);
           fs.writeFile("./failed.json", JSON.stringify(failedNames));
         });
-      if (counter + 1 < nx.length) {
+      if (counter + 1 < list.length) {
         setTimeout(() => {
           doOnce(counter + 1);
         }, 200);
@@ -848,9 +1020,75 @@ async function main() {
     };
   }
 
+  async function sanitizeAccountTransfer(
+    accountName,
+    asset,
+    startBlock = 0,
+    _endBlock
+  ) {
+    let list = await statAccountTransfer(accountName);
+    let endBlock =
+      _endBlock || (await getGlobalDynamic()).last_irreversible_block_num;
+    let res = list
+      .filter(
+        transfer =>
+          transfer.blockNum >= startBlock && transfer.blockNum <= endBlock
+      )
+      .filter(transfer => (asset ? transfer.amount.asset == asset : true));
+    res.overview = res.reduce(
+      (all, transfer) => {
+        if (transfer.from === accountName) {
+          all.deposit += transfer.amount.value;
+        } else {
+          all.withdraw += transfer.amount.value;
+        }
+        return all;
+      },
+      { withdraw: 0, deposit: 0 }
+    );
+    return res;
+  }
+
+  async function statGatewayOrder(
+    asset = "JADE.ETH",
+    fundType = "DEPOSIT",
+    _startTime,
+    _endTime
+  ) {
+    let startTime =
+      _startTime ||
+      moment
+        .utc()
+        .subtract(5, "d")
+        .toISOString();
+    let endTime = _endTime || moment.utc().toISOString();
+    let Db = require("./db");
+    // let ISODate = Db.ISODate;
+    let db = await Db.getDb();
+    console.log(startTime);
+    let res = await db
+      .find({
+        fundType,
+        isCybexFinished: true,
+        asset,
+        finishedAt: {
+          $gt: new Date(startTime),
+          $lt: new Date(endTime)
+        }
+      })
+      .toArray();
+    console.log(res);
+  }
+
   async function initDaemon() {
     let { daemon } = this;
     return daemon.init();
+  }
+
+  async function getVol(quote, base) {
+    return await this.daemon.Apis.instance()
+      .db_api()
+      .exec("get_24_volume", [quote, base]);
   }
 
   async function findAccounts() {
@@ -871,7 +1109,9 @@ async function main() {
 
   const commands = {
     // Explorer
-    "get-account": getPrintFn(getAccountInfo),
+    "get-account": getPrintFn(getAccountInfo, "getAccount"),
+    "get-full-account": getPrintFn(getAccountFullInfo, "getAccount"),
+    "get-balance": getPrintFn(getAccountBalance),
     gah: getPrintFn(getAccountHistory),
     "show-agent": getPrintFn(function() {
       return this.daemon.daemonAccountInfo;
@@ -887,37 +1127,52 @@ async function main() {
     trade: getPrintFn(getTradeHistory),
     "gen-key": ``,
     // Temp
-    // "code": getPrintFn(genCode),
+    code: getPrintFn(genCode),
     // "test-code": getPrintFn(testCode),
     // "fix-code": getPrintFn(fixCode),
-    // "send-code": getPrintFn(sendCodeWinner),
+    "send-code": getPrintFn(sendCodeWinner),
     stat: getPrintFn(stat),
     fa: getPrintFn(findAccounts),
-    // "send-prize": getPrintFn(sendPrize),
+    "send-prize": getPrintFn(sendCodeWinner),
     "check-balance": getPrintFn(checkAccountBalance),
     "gen-pub": getPrintFn(genPub),
+    "gen-address": getPrintFn(genAddress),
     "get-db": getPrintFn(getDB),
     "get-limits": getPrintFn(getLimitOrder),
     "top-buy": getPrintFn(topBuyLimits),
     "top-sell": getPrintFn(topSellLimits),
     "get-asset": getPrintFn(getAsset),
+    "get-vol": getPrintFn(getVol),
     "test-gateway": getPrintFn(testGateway),
     "stat-account": getPrintFn(statAccountTransfer),
     "stat-register": getPrintFn(statRegister),
     "stat-limit": getPrintFn(statLimit),
+    "stat-gateway-order": getPrintFn(statGatewayOrder),
+    "sanitize-transfer": getPrintFn(sanitizeAccountTransfer),
     "update-feed-producer": getPrintFn(updateFeedProducer),
+    "verify-list": getPrintFn(verifyAccountExist),
     "feed-price": getPrintFn(feedPrice),
     "settle-asset": getPrintFn(settleAsset),
-    "sell": getPrintFn(sellAsset),
+    "remove-details": getPrintFn(removeDetails),
+    sell: getPrintFn(sellAsset),
+    sanitize: getPrintFn(sanitize),
+    "create-committee": getPrintFn(createCommittee),
+    "find-who-has": getPrintFn(findWhoHas),
     "read-wallet": getPrintFn(readWallet)
     // "test-pub": getPrintFn(demo.keyTest),
+  };
+
+  let cmds = {
+    getAccount: getAccountInfo,
+    getBalance: getAccountBalance
   };
 
   let root = await createCli(
     {
       prompt: "Cybex>",
       context: {
-        daemon
+        daemon,
+        cmds
       }
     },
     commands
