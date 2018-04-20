@@ -448,9 +448,6 @@ async function main() {
     }
   }
 
-  const tshirt = require("./dinner/TshirtSeller");
-  const dinner = require("./dinner/DinnerSeller");
-  const james = require("./dinner/James");
 
   async function sanitize() {
     let sellers = [...tshirt, ...dinner].map(sell => {
