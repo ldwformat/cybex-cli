@@ -37,20 +37,20 @@ const DEFAULT_ARGS = {
   seed: "qwer1234qwer1234"
 };
 
-const args = argv.splice(2).reduce((all, arg) => {
+const cliArgs = argv.splice(2).reduce((all, arg) => {
   let [argName, argValue] = arg.replace(/--/g, "").split("=");
   return {
     ...all,
     [argName]: argValue
   };
 }, DEFAULT_ARGS);
-console.log("ARGS: ", args);
+// console.log("ARGS: ", cliArgs);
 
-const NODE_URL = args.api;
+const NODE_URL = cliArgs.api;
 // ? "wss://shenzhen.51nebula.com/"
 // : "wss://shanghai.51nebula.com/";
-const DAEMON_USER = args.user;
-const DAEMON_PASSWORD = args.seed;
+const DAEMON_USER = cliArgs.user;
+const DAEMON_PASSWORD = cliArgs.seed;
 
 const WITHDRAW_MEMO_PATTERN = new RegExp(
   `^withdraw\:${"CybexGatewayDev"}\:(eth|btc|eos|usdt|bat|ven|omg|snt|nas|knc|pay|eng)\:(.*)$`,
@@ -69,6 +69,7 @@ function getRendom() {
 
 const cmdRex = /^\s*(.+?)\s*$/;
 function splitCmd(cmdLine) {
+  // console.log("200");
   return ([cmd, ...args] = cmdLine.match(cmdRex)[1].split(" "));
 }
 
@@ -126,12 +127,17 @@ async function createCli(
   }
 
   cli.on("line", async line => {
+    // console.log("SLIN")
     if (!line) {
       return cli.prompt();
     }
+    // console.log("133")        
     let [cmd, ...args] = splitCmd(line);
+    // console.log("134")        
     if (!cmd) return cli.prompt();
-    let impl = commands[cmd.toLowerCase()];
+    // console.log("135")        
+    let impl = commands[cmd.toLowerCase()]; 
+    // console.log("136")    
     if (!impl) {
       console.error("Command not found: ", cmd);
       return cli.prompt();
@@ -243,6 +249,7 @@ async function getAccountFullInfo(...ids) {
 
 function getPrintFn(fn, splitter = "--") {
   return async function(...args) {
+    console.log("FN")    
     let bashArgs;
     let splitIndex = args.indexOf(splitter);
     if (splitIndex !== -1) {
@@ -743,7 +750,6 @@ async function main() {
         })
         .catch(err => {
           console.error(`${counter}, Creat error: ${name}, seed: ${seed}`);
-
           fs.writeFileSync(`./outputs/${logPrefix}_err.log`, record, {
             flag: "a+"
           });
