@@ -2,7 +2,12 @@ const { pseudoRandomBytes } = require("crypto");
 
 const { CybexDaemon, KEY_MODE } = require("./CybexDaemon");
 const { EVENT_ON_NEW_HISTORY } = require("./constants");
-const { TransactionBuilder, PrivateKey, ChainTypes } = require("cybexjs");
+const {
+  TransactionBuilder,
+  PrivateKey,
+  ChainTypes,
+  ChainStore
+} = require("cybexjs");
 const { execSync } = require("child_process");
 const moment = require("moment");
 const { inspect } = require("util");
@@ -34,7 +39,13 @@ const isTest = argv.indexOf("--test") !== -1;
 const DEFAULT_ARGS = {
   api: "wss://shenzhen.51nebula.com/",
   user: "owner1",
-  seed: "qwer1234qwer1234"
+  seed: "qwer1234qwer1234",
+  mode: 0
+};
+
+const MODE_PAIR = {
+  "0": 0,
+  "1": 1
 };
 
 const cliArgs = argv.splice(2).reduce((all, arg) => {
@@ -51,6 +62,7 @@ const NODE_URL = cliArgs.api;
 // : "wss://shanghai.51nebula.com/";
 const DAEMON_USER = cliArgs.user;
 const DAEMON_PASSWORD = cliArgs.seed;
+const MODE = cliArgs.mode;
 
 const WITHDRAW_MEMO_PATTERN = new RegExp(
   `^withdraw\:${"CybexGatewayDev"}\:(eth|btc|eos|usdt|bat|ven|omg|snt|nas|knc|pay|eng)\:(.*)$`,
@@ -131,13 +143,13 @@ async function createCli(
     if (!line) {
       return cli.prompt();
     }
-    // console.log("133")        
+    // console.log("133")
     let [cmd, ...args] = splitCmd(line);
-    // console.log("134")        
+    // console.log("134")
     if (!cmd) return cli.prompt();
-    // console.log("135")        
-    let impl = commands[cmd.toLowerCase()]; 
-    // console.log("136")    
+    // console.log("135")
+    let impl = commands[cmd.toLowerCase()];
+    // console.log("136")
     if (!impl) {
       console.error("Command not found: ", cmd);
       return cli.prompt();
@@ -247,6 +259,12 @@ async function getAccountFullInfo(...ids) {
     .exec("get_full_accounts", [ids, false]);
 }
 
+async function watchAccount(...users) {
+  return await daemon.Apis.instance()
+    .db_api()
+    .exec("get_full_accounts", [users, true]);
+}
+
 function getPrintFn(fn, splitter = "--") {
   return async function(...args) {
     let bashArgs;
@@ -282,8 +300,8 @@ async function main() {
   let daemon = (this.daemon = new CybexDaemon(
     NODE_URL,
     DAEMON_USER,
-    DAEMON_PASSWORD
-    // KEY_MODE.WIF
+    DAEMON_PASSWORD,
+    parseInt(MODE)
   ));
   console.log("Daemon Created");
   // await daemon.init(); // 配置守护链接的初始化

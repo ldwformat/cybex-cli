@@ -51,13 +51,12 @@ class CybexDaemon extends events.EventEmitter {
       process.exit(1);
     }
     this.Apis = cybexjs_ws_1.Apis;
-    console.log("connected to:", nodeAddress);
+    console.log("Connected to:", nodeAddress);
     await cybexjs_1.ChainStore.init();
     this.daemonAccountInfo = await cybexjs_1.FetchChain(
       "getAccount",
       this.daemonUser
     );
-    console.log("");
     // try {
     //     cybexjs_1.ChainStore.unsubscribe(this.listenDaemonAccount);
     // }
@@ -78,7 +77,9 @@ class CybexDaemon extends events.EventEmitter {
         this.pubKeys = res.pubKeys;
         break;
       case KEY_MODE.WIF:
-        let { privKeys, pubKeys } = utils_1.genKeysFromWif(this.daemonPassword);
+        let { privKeys, pubKeys } = utils_1.genKeysFromWif({
+          active: this.daemonPassword
+        });
         this.privKeys = privKeys;
         this.pubKeys = pubKeys;
         break;
