@@ -10,7 +10,9 @@ const {
   genKeysFromSeed,
   getTransferOpWithMemo,
   getOpFromHistory,
-  filterHistoryByOp
+  filterHistoryByOp,
+  getRandomLetter,
+  genNameSet
 } = require("./utils");
 const assert = require("assert");
 const fs = require("fs");
@@ -27,13 +29,28 @@ const findWhoHas = require("./plugins/find-who-has");
 
 const argv = process.argv;
 
-const isTest = argv.some(arg => arg === "--test");
+const isTest = argv.indexOf("--test") !== -1;
 
-const NODE_URL = isTest
-  ? "wss://shenzhen.51nebula.com/"
-  : "wss://shanghai.51nebula.com/";
-const DAEMON_USER = isTest ? "owner1" : "ldw-format";
-const DAEMON_PASSWORD = "qwer1234qwer1234";
+const DEFAULT_ARGS = {
+  api: "wss://shenzhen.51nebula.com/",
+  user: "owner1",
+  seed: "qwer1234qwer1234"
+};
+
+const args = argv.splice(2).reduce((all, arg) => {
+  let [argName, argValue] = arg.replace(/--/g, "").split("=");
+  return {
+    ...all,
+    [argName]: argValue
+  };
+}, DEFAULT_ARGS);
+console.log("ARGS: ", args);
+
+const NODE_URL = args.api;
+// ? "wss://shenzhen.51nebula.com/"
+// : "wss://shanghai.51nebula.com/";
+const DAEMON_USER = args.user;
+const DAEMON_PASSWORD = args.seed;
 
 const WITHDRAW_MEMO_PATTERN = new RegExp(
   `^withdraw\:${"CybexGatewayDev"}\:(eth|btc|eos|usdt|bat|ven|omg|snt|nas|knc|pay|eng)\:(.*)$`,
@@ -264,9 +281,9 @@ async function main() {
   ));
   console.log("Daemon Created");
   // await daemon.init(); // 配置守护链接的初始化
-  daemon.init(); // 配置守护链接的初始化
+  await daemon.init(); // 配置守护链接的初始化
 
-  console.log("Daemon Setup");
+  console.log(`Daemon Setup: User: ${DAEMON_USER}`);
 
   // Set Plugin
   const sellAsset = sell(daemon);
@@ -694,6 +711,47 @@ async function main() {
     let tr = new TransactionBuilder();
     let op = tr.get_type_operation("account_create", createParams);
     return await daemonInstance.performTransaction(tr, op);
+  }
+
+  async function testCreateAccount(
+    times = 20,
+    interval = 200,
+    logPrefix = "res_create_account_" + Date.now()
+  ) {
+    let createAcc = createAccount.bind(this);
+    let names = Array.from(genNameSet(times));
+    console.log("Names", names);
+    let counter = 0;
+    let res = [];
+    let failedRes = [];
+    (function testOnce(counter) {
+      console.log("COUnte: ", counter);
+      let name = names[counter++];
+      let seed = name + genCode();
+      console.log(`${counter}, Creating account: ${name}, seed: ${seed}`);
+      let record =
+        JSON.stringify({
+          name,
+          seed
+        }) + ",";
+      createAcc(name, seed)
+        .then(res => {
+          console.log(`${counter}, Creat done: ${name}, seed: ${seed}`);
+          fs.writeFileSync(`./outputs/${logPrefix}_done.log`, record, {
+            flag: "a+"
+          });
+        })
+        .catch(err => {
+          console.error(`${counter}, Creat error: ${name}, seed: ${seed}`);
+
+          fs.writeFileSync(`./outputs/${logPrefix}_err.log`, record, {
+            flag: "a+"
+          });
+        });
+      if (counter < times) {
+        setTimeout(testOnce.bind(this, counter), interval);
+      }
+    })(counter);
   }
 
   async function getValue(accountId) {
@@ -1685,6 +1743,7 @@ async function main() {
     "get-latest-price": getPrintFn(getLatestPrice),
     "stat-vol": getPrintFn(statVolume),
     "test-gateway": getPrintFn(testGateway),
+    "test-create": getPrintFn(testCreateAccount),
     "stat-account": getPrintFn(statAccountTransfer),
     "stat-register": getPrintFn(statRegister),
     "stat-limit": getPrintFn(statLimit),

@@ -176,20 +176,29 @@ exports.decodeMemoImpl = (memo, privKey) => {
   return memoContent;
 };
 
-const getRandomLetter = () => Math.floor(Math.random() * 36).toString(36);
+const getRandomLetter = (forceLetter = false) =>
+  (forceLetter
+    ? 10 + Math.floor(Math.random() * 26)
+    : Math.floor(Math.random() * 36)
+  ).toString(36);
+
+const getValidNamePart = length =>
+  getRandomLetter(true) +
+  new Array(length - 1)
+    .fill(1)
+    .map(getRandomLetter)
+    .join("");
 const getRandomName = (nameLength = 8, spliterPos = 5) =>
-  [
-    ...new Array(spliterPos).fill(1).map(getRandomLetter),
-    "-",
-    ...new Array(nameLength - spliterPos - 1).fill(1).map(getRandomLetter)
-  ].join("");
+  getValidNamePart(spliterPos) +
+  "-" +
+  getValidNamePart(nameLength - spliterPos - 1);
 const genNameSet = (size = 20, nameLength = 8) => {
   let set = new Set();
   while (set.size < size) {
-    set.add(getRandomName(nameLength))
+    set.add(getRandomName(nameLength));
   }
   return set;
-}
+};
 
 exports.getRandomLetter = getRandomLetter;
 exports.getRandomName = getRandomName;
