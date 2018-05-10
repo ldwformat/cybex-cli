@@ -249,7 +249,6 @@ async function getAccountFullInfo(...ids) {
 
 function getPrintFn(fn, splitter = "--") {
   return async function(...args) {
-    console.log("FN")    
     let bashArgs;
     let splitIndex = args.indexOf(splitter);
     if (splitIndex !== -1) {
