@@ -50,16 +50,15 @@ const MODE_PAIR = {
 
 const cliArgs = argv.splice(2).reduce((all, arg) => {
   let [argName, argValue] = arg.replace(/--/g, "").split("=");
+  console.log("ARG: ", argName, argValue);
   return {
     ...all,
     [argName]: argValue
   };
 }, DEFAULT_ARGS);
-// console.log("ARGS: ", cliArgs);
+console.log("ARGS: ", cliArgs);
 
 const NODE_URL = cliArgs.api;
-// ? "wss://shenzhen.51nebula.com/"
-// : "wss://shanghai.51nebula.com/";
 const DAEMON_USER = cliArgs.user;
 const DAEMON_PASSWORD = cliArgs.seed;
 const MODE = cliArgs.mode;
@@ -257,6 +256,56 @@ async function getAccountFullInfo(...ids) {
   return await daemon.Apis.instance()
     .db_api()
     .exec("get_full_accounts", [ids, false]);
+}
+let subed = false;
+async function setupWatcher(record = false) {
+  ChainStore.subscribe(notice => {
+    record
+      ? fs.writeFileSync("./notice.log", { flag: "a+" })
+      : console.log(notice);
+  });
+}
+
+async function findBlockByTime(_targetTime, _startBlock, _endBlock) {
+  let interval = (await daemon.Apis.instance()
+    .db_api()
+    .exec("get_objects", [["2.0.0"]]))[0].parameters.block_interval;
+  return await findBlockByTimeImpl(new Date(_targetTime), interval)(
+    _startBlock,
+    _endBlock
+  );
+}
+
+function findBlockByTimeImpl(targetTime, interval) {
+  let counter = 0;
+  return async function search(_startBlock, _endBlock) {
+    if (counter++ > 20) return 0;
+    let startBlock = _startBlock || 0;
+    let endBlock = _endBlock || (await getGlobalDynamic()).head_block_number;
+    if (Math.abs(endBlock - startBlock) == 1) {
+      return [await getBlock(startBlock), await getBlock(endBlock)];
+    }
+    let middleBlock = Math.ceil((endBlock + startBlock) / 2);
+    let blockToSearch = await getBlock(middleBlock);
+    let blockTime = new Date(blockToSearch.timestamp + "Z");
+    // console.log(
+    //   `Start: ${startBlock}, End: ${endBlock}, Middle: ${middleBlock}, Time Of Middle Block: ${blockTime}`
+    // );
+    if (!targetTime || (!startBlock && startBlock !== 0) || !endBlock) {
+      throw Error("Invalid block num");
+    }
+    if (
+      Math.abs(blockTime.valueOf() - targetTime.valueOf()) * 2000 <
+      interval
+    ) {
+      return blockToSearch;
+    }
+    if (blockTime.valueOf() > targetTime.valueOf()) {
+      return await search(startBlock, middleBlock);
+    } else {
+      return await search(middleBlock, endBlock);
+    }
+  };
 }
 
 async function watchAccount(...users) {
@@ -1755,6 +1804,8 @@ async function main() {
     "get-db": getPrintFn(getDB),
     "get-limits": getPrintFn(getLimitOrder),
     "get-24": getPrintFn(get24),
+    "setup-watcher": getPrintFn(setupWatcher),
+    "watch-account": getPrintFn(watchAccount),
     "get-filled": getPrintFn(getFillOrder),
     "get-trade-history": getPrintFn(getTradeHistory),
     "load-filled": getPrintFn(loadFillOrder),
@@ -1775,6 +1826,7 @@ async function main() {
     "sanitize-transfer": getPrintFn(sanitizeAccountTransfer),
     "update-feed-producer": getPrintFn(updateFeedProducer),
     "verify-list": getPrintFn(verifyAccountExist),
+    "find-block": getPrintFn(findBlockByTime),
     "feed-price": getPrintFn(feedPrice),
     "settle-asset": getPrintFn(settleAsset),
     "remove-details": getPrintFn(removeDetails),
