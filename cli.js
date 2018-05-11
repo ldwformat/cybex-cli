@@ -274,7 +274,7 @@ async function findBlockByTime(_targetTime, _startBlock, _endBlock) {
     .exec("get_objects", [["2.0.0"]]))[0].parameters.block_interval;
   if (targetTime.valueOf() > new Date().valueOf()) {
     let blocksAmount = Math.floor((targetTime.valueOf() - new Date().valueOf()) / interval / 1000);
-    return "The block that you're finding is not produced yet. It could be " + (headBlock + blocksAmount);
+    return "The block that you're looking for has not been produced yet. It could be " + (headBlock + blocksAmount);
   }
   return await findBlockByTimeImpl(targetTime, interval)(
     _startBlock,
