@@ -267,12 +267,18 @@ async function setupWatcher(record = false) {
 }
 
 async function findBlockByTime(_targetTime, _startBlock, _endBlock) {
+  let targetTime = new Date(_targetTime);
+  let headBlock = (await getGlobalDynamic()).head_block_number;
   let interval = (await daemon.Apis.instance()
     .db_api()
     .exec("get_objects", [["2.0.0"]]))[0].parameters.block_interval;
-  return await findBlockByTimeImpl(new Date(_targetTime), interval)(
+  if (targetTime.valueOf() > new Date().valueOf()) {
+    let blocksAmount = Math.floor((targetTime.valueOf() - new Date().valueOf()) / interval / 1000);
+    return "The block that you're finding is not produced yet. It could be " + (headBlock + blocksAmount);
+  }
+  return await findBlockByTimeImpl(targetTime, interval)(
     _startBlock,
-    _endBlock
+    headBlock
   );
 }
 
