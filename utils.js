@@ -27,6 +27,7 @@ exports.genKeysFromSeed = (
   return roles.reduce(
     (keys, role) => {
       let priv = cybexjs_1.PrivateKey.fromSeed(`${accountName}${role}${seed}`);
+      // console.log("Priv: ", priv.toWif())
       let pubv = priv.toPublicKey().toString();
       keys.privKeys[role] = priv;
       keys.pubKeys[role] = pubv;

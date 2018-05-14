@@ -29,6 +29,8 @@ const { sell } = require("./limit-order");
 const { getWalletReader } = require("./wallet");
 const createCommittee = require("./plugins/create-committee");
 
+const { createAccount, testCreateAccount } = require("./func/create-account");
+
 const orderLimits = require("./plugins/top-limit");
 const findWhoHas = require("./plugins/find-who-has");
 
@@ -273,8 +275,13 @@ async function findBlockByTime(_targetTime, _startBlock, _endBlock) {
     .db_api()
     .exec("get_objects", [["2.0.0"]]))[0].parameters.block_interval;
   if (targetTime.valueOf() > new Date().valueOf()) {
-    let blocksAmount = Math.floor((targetTime.valueOf() - new Date().valueOf()) / interval / 1000);
-    return "The block that you're looking for has not been produced yet. It could be " + (headBlock + blocksAmount);
+    let blocksAmount = Math.floor(
+      (targetTime.valueOf() - new Date().valueOf()) / interval / 1000
+    );
+    return (
+      "The block that you're looking for has not been produced yet. It could be " +
+      (headBlock + blocksAmount)
+    );
   }
   return await findBlockByTimeImpl(targetTime, interval)(
     _startBlock,
@@ -742,94 +749,6 @@ async function main() {
     let tr = new TransactionBuilder();
     let op = tr.get_type_operation("asset_global_settle", feed);
     return await daemon.performTransaction(tr, op);
-  }
-
-  async function createAccount(accountName, seed) {
-    let { daemon } = this;
-    return await createAccountImpl(accountName, seed);
-  }
-
-  async function createAccountImpl(
-    name,
-    seed,
-    { accounts = null, weightBase = 1 } = {},
-    daemonInstance = daemon
-  ) {
-    let { pubKeys } = genKeysFromSeed(name, seed);
-    let account_auths =
-      (accounts && accounts.map(name => [name, weightBase])) || [];
-    let createParams = {
-      fee: {
-        amount: 0,
-        asset_id: 0
-      },
-      registrar: daemonInstance.daemonAccountInfo.get("id"),
-      referrer: daemonInstance.daemonAccountInfo.get("id"),
-      referrer_percent: 0,
-      name: name,
-      owner: {
-        weight_threshold: account_auths.length * weightBase || 1,
-        account_auths,
-        key_auths: [[pubKeys.owner, 1]],
-        address_auths: []
-      },
-      active: {
-        weight_threshold: account_auths.length * weightBase || 1,
-        account_auths,
-        key_auths: [[pubKeys.active, 1]],
-        address_auths: []
-      },
-      options: {
-        memo_key: pubKeys.owner,
-        voting_account: "1.2.5",
-        num_witness: 0,
-        num_committee: 0,
-        votes: []
-      }
-    };
-    let tr = new TransactionBuilder();
-    let op = tr.get_type_operation("account_create", createParams);
-    return await daemonInstance.performTransaction(tr, op);
-  }
-
-  async function testCreateAccount(
-    times = 20,
-    interval = 200,
-    logPrefix = "res_create_account_" + Date.now()
-  ) {
-    let createAcc = createAccount.bind(this);
-    let names = Array.from(genNameSet(times));
-    console.log("Names", names);
-    let counter = 0;
-    let res = [];
-    let failedRes = [];
-    (function testOnce(counter) {
-      console.log("COUnte: ", counter);
-      let name = names[counter++];
-      let seed = name + genCode();
-      console.log(`${counter}, Creating account: ${name}, seed: ${seed}`);
-      let record =
-        JSON.stringify({
-          name,
-          seed
-        }) + ",";
-      createAcc(name, seed)
-        .then(res => {
-          console.log(`${counter}, Creat done: ${name}, seed: ${seed}`);
-          fs.writeFileSync(`./outputs/${logPrefix}_done.log`, record, {
-            flag: "a+"
-          });
-        })
-        .catch(err => {
-          console.error(`${counter}, Creat error: ${name}, seed: ${seed}`);
-          fs.writeFileSync(`./outputs/${logPrefix}_err.log`, record, {
-            flag: "a+"
-          });
-        });
-      if (counter < times) {
-        setTimeout(testOnce.bind(this, counter), interval);
-      }
-    })(counter);
   }
 
   async function getValue(accountId) {
