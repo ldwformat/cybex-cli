@@ -7,5 +7,7 @@ init(["file"]).then(({ daemon, args }) => {
   const ASSET = args.asset || "1.3.0";
   const AMOUNT = parseInt(args.amount, 10) || 1;
   const nameList = require(args.file);
-  multiTransfer(nameList, INVERTAL, LOG_PREFIX).bind({ daemon })(ASSET, AMOUNT);
+  multiTransfer(nameList, INVERTAL, LOG_PREFIX, () => {
+    process.exit();
+  }).bind({ daemon })(ASSET, AMOUNT);
 });

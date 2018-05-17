@@ -32,7 +32,7 @@ async function transfer(account, value, asset = "1.3.0", memo) {
   };
   return await daemon.performTransfer(tx);
 }
-const multiTransfer = (list, interval, logPrefix) =>
+const multiTransfer = (list, interval, logPrefix, cb) =>
   function(asset, amount) {
     let failedNames = [];
     let counter = 0;
@@ -46,7 +46,9 @@ const multiTransfer = (list, interval, logPrefix) =>
           if (counter === list.length) {
             let duration = (Date.now() - starter) / 1000;
             console.log(`Total: , ${duration}s`);
-            process.exit(0);
+            if (cb) {
+              cb();
+            }
           }
         })
         .catch(err => {
