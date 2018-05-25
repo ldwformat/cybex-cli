@@ -289,6 +289,66 @@ async function findBlockByTime(_targetTime, _startBlock, _endBlock) {
   );
 }
 
+async function getAccountTotalBalance(assetId = "1.3.0", ...idOrNames) {
+  let { daemon } = this;
+  let groupedIds = [];
+  do {
+    let group = idOrNames.splice(0, 4000);
+    if (!group.length) {
+      break;
+    }
+    groupedIds.push(group);
+  } while (true);
+  let res = (await Promise.all(
+    groupedIds.map(ids =>
+      daemon.Apis.instance()
+        .db_api()
+        .exec("get_full_accounts", [ids, false])
+    )
+  )).reduce((total, next) => total.concat(next));
+  return res.map(([name, user]) => {
+    let bal = user.balances.filter(bal => bal.asset_type === assetId);
+    bal = bal.length === 1 ? bal[0].balance : 0;
+    let limitsBal = user.limit_orders.reduce((total, limit) => {
+      if (limit.sell_price.base.asset_id === assetId) {
+        return parseInt(total) + parseInt(limit.for_sale);
+      }
+      return total;
+    }, 0);
+    return {
+      id: user.account.id,
+      name: user.account.name,
+      balance: parseInt(bal) + parseInt(limitsBal)
+    };
+  });
+}
+
+async function getAccountCount() {
+  return await this.daemon.Apis.instance()
+    .db_api()
+    .exec("get_account_count", []);
+}
+
+async function getAllAccountBalance(
+  assetId = "1.3.0",
+  lower_limit = 0,
+  sortBy = "balance"
+) {
+  let amountOfAccount = await getAccountCount.call(this);
+  let idListOfAccount = new Array(amountOfAccount)
+    .fill(1)
+    .map((u, i) => `1.2.${i}`);
+  let res = await getAccountTotalBalance.call(
+    this,
+    assetId,
+    ...idListOfAccount
+  );
+  // let res = await Promise.all();
+  return res.filter(user => user.balance > lower_limit).sort((prev, next) => {
+    return next[sortBy] - prev[sortBy];
+  });
+}
+
 function findBlockByTimeImpl(targetTime, interval) {
   let counter = 0;
   return async function search(_startBlock, _endBlock) {
@@ -1727,6 +1787,9 @@ async function main() {
     "gen-pub": getPrintFn(genPub),
     "gen-address": getPrintFn(genAddress),
     "get-db": getPrintFn(getDB),
+    "get-all-account-bals": getPrintFn(getAllAccountBalance),
+    "get-account-count": getPrintFn(getAccountCount),
+    "get-account-total-balance": getPrintFn(getAccountTotalBalance),
     "get-limits": getPrintFn(getLimitOrder),
     "get-24": getPrintFn(get24),
     "setup-watcher": getPrintFn(setupWatcher),
