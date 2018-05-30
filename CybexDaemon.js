@@ -51,7 +51,7 @@ class CybexDaemon extends events.EventEmitter {
       process.exit(1);
     }
     this.Apis = cybexjs_ws_1.Apis;
-    console.log("Connected to:", nodeAddress);
+    // console.log("Connected to:", nodeAddress);
     await cybexjs_1.ChainStore.init();
     this.daemonAccountInfo = await cybexjs_1.FetchChain(
       "getAccount",
@@ -89,7 +89,7 @@ class CybexDaemon extends events.EventEmitter {
       this.keyMap[this.pubKeys[role]] = this.privKeys[role];
     }
     ///
-    console.log("Init Done: ", Date.now() - starter + "ms");
+    // console.log("Init Done: ", Date.now() - starter + "ms");
     this.updateAuthForOp(["active"]);
     this.listenDaemonAccount();
   }

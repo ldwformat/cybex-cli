@@ -117,20 +117,24 @@ exports.decodeMemo = (memo, privKeys) => {
   return memoContent;
 };
 exports.decodeMemoImpl = (memo, privKey) => {
-  console.log("Try: ", memo);
+  let publicKeyString = privKey.toPublicKey().toPublicKeyString();
+  if (publicKeyString !== memo.to && publicKeyString !== memo.from) {
+    throw "Not valid privKey";
+  }
+  let pubToBeUsed = publicKeyString === memo.to ? memo.from : memo.to;
   let memoContent;
   try {
     memoContent = cybexjs_1.Aes.decrypt_with_checksum(
       privKey,
-      cybexjs_1.PublicKey.fromPublicKeyString(memo.to),
+      pubToBeUsed,
       memo.nonce,
       memo.message,
-      true
+      false
     ).toString("utf-8");
   } catch (e) {
     memoContent = cybexjs_1.Aes.decrypt_with_checksum(
       privKey,
-      cybexjs_1.PublicKey.fromPublicKeyString(memo.from),
+      pubToBeUsed,
       memo.nonce,
       memo.message,
       true
