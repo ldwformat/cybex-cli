@@ -17,20 +17,20 @@ const MODE_PAIR = {
 };
 const cliArgs = argv.splice(2).reduce((all, arg) => {
   let [argName, argValue] = arg.replace(/--/g, "").split("=");
-  console.log("ARG: ", argName, argValue);
+  // console.log("ARG: ", argName, argValue);
   return {
     ...all,
     [argName]: argValue
   };
 }, DEFAULT_ARGS);
-console.log("ARGS: ", cliArgs);
+// console.log("ARGS: ", cliArgs);
 
 const NODE_URL = cliArgs.api;
 const DAEMON_USER = cliArgs.user;
 const DAEMON_PASSWORD = cliArgs.seed;
 const MODE = cliArgs.mode;
 
-exports.init = (requiredArgs = []) =>
+exports.init = (requiredArgs = [], enableLog = true) =>
   (async () => {
     assert(
       requiredArgs.every(argName => argName in cliArgs),
@@ -42,9 +42,9 @@ exports.init = (requiredArgs = []) =>
       DAEMON_PASSWORD,
       parseInt(MODE)
     ));
-    console.log("Daemon Created");
+    if (enableLog) console.log("Daemon Created");
     await daemon.init(); // 配置守护链接的初始化
-    console.log(`Daemon Setup: User: ${DAEMON_USER}`);
-    console.log(`=============== Init Done ==============`);
+    if (enableLog) console.log(`Daemon Setup: User: ${DAEMON_USER}`);
+    if (enableLog) console.log(`=============== Init Done ==============`);
     return { daemon, args: cliArgs };
   })().catch(err => console.error("Uncaught Error: ", err));
