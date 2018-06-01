@@ -1111,6 +1111,38 @@ async function main() {
     fs.writeFileSync("./cybex_has_send.json", JSON.stringify(res));
     return res;
   }
+  async function statAccountTransferFromHistory(account, { daemon } = this) {
+    let accountId;
+    if (!isId(account)) {
+      accountId = (await daemon.getAccountByName(account))["id"];
+    } else {
+      accountId = account;
+    }
+    let transfers = filterHistoryByOp(
+      await getAccountFullHistory.call(this, accountId, 100, daemon),
+      0
+    );
+    let transfersWithMemo =
+      accountId == daemon.daemonAccountInfo.get("id")
+        ? transfers.map(transfer =>
+            getTransferOpWithMemo.call(this, transfer, [
+              daemon.privKey,
+              daemon.privKeys.owner
+            ])
+          )
+        : transfers.map(history => ({
+            ...history.op[1],
+            timestamp: history.timestamp,
+            blockNum: history.blockNum
+          }));
+    let res = await Promise.all(
+      transfersWithMemo.map(
+        async transfer => await sanTransfer.call(this, transfer)
+      )
+    );
+    console.log("RES: ", res);
+    return res;
+  }
 
   function txFilterForLimit(blocks, startNumOfBlock) {
     return blocks
@@ -1807,6 +1839,7 @@ async function main() {
     "test-gateway": getPrintFn(testGateway),
     "test-create": getPrintFn(testCreateAccount),
     "stat-account": getPrintFn(statAccountTransfer),
+    "stat-account-from-history": getPrintFn(statAccountTransferFromHistory),
     "stat-register": getPrintFn(statRegister),
     "stat-limit": getPrintFn(statLimit),
     "stat-deposit": getPrintFn(statDeposit),

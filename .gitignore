@@ -60,6 +60,10 @@ typings/
 # next.js build output
 .next
 outputs/**/*
+account/**/*
 register/**/*
 dinner
 inputs
+*.json
+\.output
+cybex_has_send.json
