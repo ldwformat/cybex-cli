@@ -40,7 +40,7 @@ const isTest = argv.indexOf("--test") !== -1;
 
 const DEFAULT_ARGS = {
   api: "wss://shenzhen.51nebula.com/",
-  user: "owner1",
+  user: "nathan",
   seed: "qwer1234qwer1234",
   mode: 0
 };
@@ -581,7 +581,7 @@ async function main() {
     let asset = (await getAsset(_asset))[0];
     console.log("Asset: ", asset, daemon.daemonAccountInfo.get("id"));
     let price = quoteAmount / baseAmount;
-    price = price * Math.pow(10, asset.precision) / Math.pow(10, 5);
+    price = (price * Math.pow(10, asset.precision)) / Math.pow(10, 5);
     let denominator = 1;
     let numerator = Math.round(price * denominator);
     let price_feed = {
@@ -912,7 +912,29 @@ async function main() {
     return res;
   }
 
+  async function getAddressFromPub(pubKeyString) {
+    const { key, PublicKey } = require("cybexjs");
+
+    let pubKey = PublicKey.fromPublicKeyString(
+      "CYB5bxCtbzMhTVxeep7iR5eKFq1MzgWFeyk8rExgdEXiowfAKSBhX",
+      "CYB"
+    );
+    console.log("PUBKEY: ", pubKey);
+    let address = key.addresses(pubKeyString, "CYB");
+
+    let bals = await daemon.Apis.instance()
+      .db_api()
+      .exec("get_balance_objects", [address]);
+
+    console.log("ADD: ", address);
+    return bals;
+  }
+
   const { correctMarketPair } = require("./utils/index");
+
+  async function benchVod() {
+    
+  }
 
   async function statVolume() {
     let { daemon } = this;
@@ -1523,6 +1545,16 @@ async function main() {
     };
   }
 
+  async function benchAllUser(interval = 100) {
+    let { daemon } = this;
+    let count = await getAccountCount();
+    for (let i = 0; i < count; i++) {
+      let account = await getAccountFullInfo("1.2." + i);
+      await new Promise(resolve => setTimeout(() => resolve()), interval);
+      console.log("Index: ", account[0][1].account.id, account[0][1].account.name);
+    }
+  }
+
   async function updateParams(file) {
     let { daemon } = this;
     let tx = new TransactionBuilder();
@@ -1792,6 +1824,7 @@ async function main() {
     "get-account": getPrintFn(getAccountInfo, "getAccount"),
     "get-full-account": getPrintFn(getAccountFullInfo, "getAccount"),
     "get-balance": getPrintFn(getAccountBalance),
+    "bench-all-user": getPrintFn(benchAllUser),
     gah: getPrintFn(getAccountHistory),
     "show-agent": getPrintFn(function() {
       return this.daemon.daemonAccountInfo;
@@ -1817,6 +1850,7 @@ async function main() {
     "check-balance": getPrintFn(checkAccountBalance),
     compare: getPrintFn(compareWithdrawOrder),
     "gen-pub": getPrintFn(genPub),
+    "gen-address-from-pub": getPrintFn(getAddressFromPub),
     "gen-address": getPrintFn(genAddress),
     "get-db": getPrintFn(getDB),
     "get-all-account-bals": getPrintFn(getAllAccountBalance),
