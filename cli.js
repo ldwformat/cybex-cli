@@ -40,7 +40,7 @@ const isTest = argv.indexOf("--test") !== -1;
 
 const DEFAULT_ARGS = {
   api: "wss://shenzhen.51nebula.com/",
-  user: "nathan",
+  user: "owner1",
   seed: "qwer1234qwer1234",
   mode: 0
 };
@@ -907,6 +907,7 @@ async function main() {
       let privKey = PrivateKey.fromSeed(s);
       let pubKey = privKey.toPublicKey().toPublicKeyString();
       console.log("Address: ", privKey.toPublicKey().toAddressString());
+      console.log("PTS Address: ", privKey.toPublicKey().toPtsAddy());
       return pubKey;
     });
     return res;

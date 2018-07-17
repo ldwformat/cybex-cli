@@ -67,7 +67,8 @@ function decryptKeysByWalletAes(aesPrivate, cryptedKey) {
 function getAesPrivateOfWallet(password, wallet) {
   let passwordPrivate = PrivateKey.fromSeed(password);
   let passwordPublic = passwordPrivate.toPublicKey().toPublicKeyString();
-  if (wallet.password_pubkey !== passwordPublic) return false;
+  console.log("Wallet : ", wallet.password_pubkey);
+  // if (wallet.password_pubkey !== passwordPublic) return false;
   return decryptAesKey(password, wallet.encryption_key);
 }
 
