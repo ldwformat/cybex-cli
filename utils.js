@@ -2,6 +2,8 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const cybexjs_1 = require("cybexjs");
 const { Apis } = require("cybexjs-ws");
+const dict = require("./utils/dictionary_en.json").en;
+
 exports.getIndexSuffixdArray = strOrArray =>
   Array.isArray(strOrArray)
     ? strOrArray.map((item, index) => item)
@@ -184,11 +186,12 @@ const getRandomLetter = (forceLetter = false) =>
   ).toString(36);
 
 const getValidNamePart = length =>
-  getRandomLetter(true) +
-  new Array(length - 1)
-    .fill(1)
-    .map(getRandomLetter)
-    .join("");
+  dict[Math.floor(Math.random() * dict.length)]
+  // getRandomLetter(true) +
+  // new Array(length - 1)
+  //   .fill(1)
+  //   .map(getRandomLetter)
+  //   .join("");
 const getRandomName = (nameLength = 8, spliterPos = 5) =>
   getValidNamePart(spliterPos) +
   "-" +
