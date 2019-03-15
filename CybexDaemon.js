@@ -173,6 +173,8 @@ class CybexDaemon extends events.EventEmitter {
       tr.add_operation(op);
       await tr.set_required_fees();
       await tr.update_head_block();
+      console.log("TrBuffer: ");
+      console.log(tr.tr_buffer);
       if (this.mode === KEY_MODE.PASSWORD) {
         loginInstance.signTransaction(tr);
       } else {
@@ -195,6 +197,46 @@ class CybexDaemon extends events.EventEmitter {
       throw new Error(e);
     }
   }
+
+  async updateProposal(id) {
+    let tr = new cybexjs_1.TransactionBuilder();
+    let op = tr.get_type_operation("proposal_update", {
+      fee: { asset_id: "1.3.0", amount: 0 },
+      fee_paying_account: this.daemonAccountInfo.get("id"),
+      proposal: id,
+      active_approvals_to_add: this.daemonAccountInfo.get("id")
+    });
+    return await this.performTransaction(tr, op);
+  }
+
+  async performProposalTransaction(tr, ops, loginInstance = cybexjs_1.Login) {
+    try {
+      await tr.update_head_block();
+      ops.forEach(op => tr.add_operation(op));
+      await tr.set_required_fees();
+      const propose_options = {
+        fee_paying_account: this.daemonAccountInfo.get("id"),
+        expiration_time: Math.ceil(Date.now() / 1000) + 600
+      };
+      await tr.propose(propose_options);
+      await tr.set_required_fees();
+      await tr.update_head_block();
+      if (this.mode === KEY_MODE.PASSWORD) {
+        loginInstance.signTransaction(tr);
+      } else {
+        tr.add_signer(this.privKey);
+      }
+      console.log("Transaction to broadcast: ", tr.serialize());
+      return tr.broadcast();
+      // return tr.serialize();
+    } catch (e) {
+      await this.init();
+      console.error("PERFORM ERROR 1: ", e.message);
+      throw e;
+      // throw new Error(e);
+    }
+  }
+
   /**
    * 检测并更新当前Login中存有的auth
    *

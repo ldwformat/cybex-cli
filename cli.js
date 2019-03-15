@@ -5,8 +5,14 @@ const { EVENT_ON_NEW_HISTORY } = require("./constants");
 const {
   TransactionBuilder,
   PrivateKey,
+  PublicKey,
   ChainTypes,
-  ChainStore
+  ChainStore,
+  Signature,
+  Serializer,
+  types,
+  Address,
+  key
 } = require("cybexjs");
 const { execSync } = require("child_process");
 const moment = require("moment");
@@ -23,13 +29,24 @@ const assert = require("assert");
 const fs = require("fs");
 const path = require("path");
 const readline = require("readline");
-const demo = require("./demo");
-const stream = require("stream");
 const { sell } = require("./limit-order");
 const { getWalletReader } = require("./wallet");
 const createCommittee = require("./plugins/create-committee");
 
-const { createAccount, testCreateAccount } = require("./func/create-account");
+const {
+  createAccount,
+  testCreateAccount,
+  upgradeAccount,
+  createAccountWithBlocking
+} = require("./func/create-account");
+const { withdrawClaim, withdrawCreate } = require("./func/withdraw");
+const { createLimitOrder, cancelLimitOrder } = require("./func/limit-order");
+const {
+  proposalCallOrder,
+  proposalAtomTransfer,
+  decodeMemoDemo
+} = require("./func/transfer");
+const { updateFee } = require("./func/update");
 
 const orderLimits = require("./plugins/top-limit");
 const findWhoHas = require("./plugins/find-who-has");
@@ -186,7 +203,7 @@ async function getAccountFullHistory(accountId, numOfRecord, daemon) {
       .history_api()
       .exec("get_account_history", [
         accountId,
-        "1.11.0",
+        "1.11.1",
         numOfRecord,
         "1.11." + lastId
       ]);
@@ -196,11 +213,11 @@ async function getAccountFullHistory(accountId, numOfRecord, daemon) {
   return res;
 }
 
-async function getObject(id = "1.1.1") {
+async function getObject(id = "1.1.1", ...args) {
   console.log(`Get object ${id}`);
   return await this.daemon.Apis.instance()
     .db_api()
-    .exec("get_objects", [[id]]);
+    .exec("get_objects", [[id, ...args]]);
 }
 
 let blocks = {};
@@ -274,6 +291,7 @@ async function findBlockByTime(_targetTime, _startBlock, _endBlock) {
   let interval = (await daemon.Apis.instance()
     .db_api()
     .exec("get_objects", [["2.0.0"]]))[0].parameters.block_interval;
+  console.log("Block");
   if (targetTime.valueOf() > new Date().valueOf()) {
     let blocksAmount = Math.floor(
       (targetTime.valueOf() - new Date().valueOf()) / interval / 1000
@@ -344,9 +362,11 @@ async function getAllAccountBalance(
     ...idListOfAccount
   );
   // let res = await Promise.all();
-  return res.filter(user => user.balance > lower_limit).sort((prev, next) => {
-    return next[sortBy] - prev[sortBy];
-  });
+  return res
+    .filter(user => user.balance > lower_limit)
+    .sort((prev, next) => {
+      return next[sortBy] - prev[sortBy];
+    });
 }
 
 function findBlockByTimeImpl(targetTime, interval) {
@@ -435,8 +455,6 @@ async function main() {
   const sellAsset = sell(daemon);
   const readWallet = getWalletReader();
 
-  // daemon.performTransfer(transferObj);
-  // daemon.performTransfer(transferObj1);
   async function getOneAccount(accountId) {
     let incomes = {};
 
@@ -528,7 +546,7 @@ async function main() {
     { daemon } = this
   ) {
     let start = new Date().toISOString();
-    let stop = new Date(Date.now() - 3600 * 1000).toISOString();
+    let stop = new Date(Date.now() - 86400 * 1000 * 10000).toISOString();
     let time = [9, 8, 7, 6, 5, 4];
     let history = (await Promise.all(
       time.map(p =>
@@ -537,9 +555,9 @@ async function main() {
           .exec("get_trade_history", [
             base,
             quote,
-            `2018-04-24T0${p}:00:00`,
+            start.substring(0, stop.length - 1),
             // start,
-            `2018-04-24T0${p - 1}:00:00`,
+            stop.substring(0, stop.length - 1),
             // stop,
             100
           ])
@@ -559,8 +577,7 @@ async function main() {
     //       100
     //     ])
     // ]);
-
-    console.log(history.length);
+    return history.length;
   }
 
   // const warningConfig = require("./warning-config.json");
@@ -577,34 +594,41 @@ async function main() {
       };
     }
   }
-  const feedPrice = async function(_asset, baseAmount, quoteAmount) {
+  const feedPrice = async function(
+    _asset,
+    baseAmount,
+    quoteAmount,
+    maintenance_collateral_ratio = 1750,
+    maximum_short_squeeze_ratio = 1200
+  ) {
     let asset = (await getAsset(_asset))[0];
     console.log("Asset: ", asset, daemon.daemonAccountInfo.get("id"));
     let price = quoteAmount / baseAmount;
     price = (price * Math.pow(10, asset.precision)) / Math.pow(10, 5);
+    console.log("Price: ", price);
     let denominator = 1;
     let numerator = Math.round(price * denominator);
     let price_feed = {
       settlement_price: {
         quote: {
           asset_id: "1.3.0",
-          amount: denominator
+          amount: parseInt(quoteAmount)
         },
         base: {
           asset_id: asset["id"],
-          amount: numerator
+          amount: parseInt(baseAmount)
         }
       },
-      maintenance_collateral_ratio: 1750,
-      maximum_short_squeeze_ratio: 1200,
+      maintenance_collateral_ratio: parseInt(maintenance_collateral_ratio),
+      maximum_short_squeeze_ratio: parseInt(maximum_short_squeeze_ratio),
       core_exchange_rate: {
         quote: {
           asset_id: "1.3.0",
-          amount: parseInt(denominator * 1.05)
+          amount: parseInt(quoteAmount * 1.05)
         },
         base: {
           asset_id: asset["id"],
-          amount: numerator
+          amount: parseInt(baseAmount)
         }
       }
     };
@@ -633,6 +657,30 @@ async function main() {
       limits: await daemon.Apis.instance()
         .db_api()
         .exec("get_limit_orders", [quote.id, base.id, limit])
+    };
+  }
+  async function getTicker(quoteAsset, baseAsset) {
+    let [quote, base] = await getAsset(quoteAsset, baseAsset);
+    assert(quote && base, "Assets should be a pair");
+    let { daemon } = this;
+    return {
+      base,
+      quote,
+      limits: await daemon.Apis.instance()
+        .db_api()
+        .exec("get_ticker", [quote.id, base.id])
+    };
+  }
+
+  async function getSettleOrder(asset, limit = 100) {
+    let [quote] = await getAsset(asset);
+    assert(quote, `Assets ${asset} does not exists`);
+    let { daemon } = this;
+    return {
+      quote,
+      limits: await daemon.Apis.instance()
+        .db_api()
+        .exec("get_settle_orders", [quote.id, limit])
     };
   }
 
@@ -671,6 +719,10 @@ async function main() {
     } else {
       return await getAccountBalanceByAccountId(nameOrId, assets);
     }
+  }
+
+  async function approve(id) {
+    return this.daemon.updateProposal(id);
   }
 
   async function sanitize() {
@@ -782,7 +834,7 @@ async function main() {
     return await daemon.performTransaction(tr, op);
   }
   // update feed
-  async function settleAsset(_asset, base, quote) {
+  async function settleAssetGlobal(_asset, base, quote) {
     let { daemon } = this;
     let asset = (await getAsset(_asset))[0];
     console.log("Issuer: ", daemon.daemonAccountInfo.get("id"));
@@ -810,24 +862,123 @@ async function main() {
     let op = tr.get_type_operation("asset_global_settle", feed);
     return await daemon.performTransaction(tr, op);
   }
-
-  async function getValue(accountId) {
-    let incomes = await getOneAccount(accountId);
-    let bals = (await getAccountBalance(accountId, incomes)).map(bal => ({
-      value: bal.amount * rate[bal.asset_id],
-      ...bal
-    }));
-    let account = (await daemon.Apis.instance()
-      .db_api()
-      .exec("get_accounts", [[accountId]]))[0].name;
-    let value = bals.reduce((acc, next) => acc + next.value, 0) / 10000;
-    return {
-      accountId,
-      incomes,
-      bals,
-      account,
-      value
+  async function settleAsset(_asset, amount) {
+    let { daemon } = this;
+    let asset = (await getAsset(_asset))[0][0];
+    console.log("Current User: ", daemon.daemonAccountInfo.get("id"));
+    console.log("Current Asset: ", asset);
+    let feed = {
+      fee: {
+        asset_id: "1.3.0",
+        amount: 0
+      },
+      account: daemon.daemonAccountInfo.get("id"),
+      amount: {
+        asset_id: asset.id,
+        amount
+      }
     };
+
+    let tr = new TransactionBuilder();
+    let op = tr.get_type_operation("asset_settle", feed);
+    return await daemon.performTransaction(tr, op);
+  }
+
+  async function override(_from, _to, _asset, value) {
+    let { daemon } = this;
+    let asset = (await getAsset(_asset))[0];
+    console.log("Issuer: ", daemon.daemonAccountInfo.get("id"));
+    let from = await getAccountId(_from);
+    let to = await getAccountId(_to);
+    let transfer = {
+      fee: {
+        asset_id: "1.3.0",
+        amount: 0
+      },
+      issuer: daemon.daemonAccountInfo.get("id"),
+      from,
+      to,
+      amount: {
+        asset_id: asset.id,
+        amount: parseInt(value * Math.pow(10, asset.precision))
+      },
+      extensions: []
+    };
+
+    let tr = new TransactionBuilder();
+    let op = tr.get_type_operation("override_transfer", transfer);
+    return await daemon.performTransaction(tr, op);
+  }
+  let { genMemo } = require("./utils");
+  async function proposalOverride(
+    _from,
+    _to,
+    _asset,
+    value,
+    _memo = "网关异常处理"
+  ) {
+    let { daemon } = this;
+    let asset = (await getAsset(_asset))[0];
+    console.log("Issuer: ", daemon.daemonAccountInfo.get("id"));
+    let from = await getAccountId(_from);
+    let to = await getAccountId(_to);
+    let memo = _memo ? await genMemo(daemon.daemonAccountInfo.get("id"), to, _memo, daemon.keyMap)  : undefined;
+    
+    let transfer = {
+      fee: {
+        asset_id: "1.3.0",
+        amount: 0
+      },
+      issuer: "1.2.29",
+      // issuer: daemon.daemonAccountInfo.get("id"),
+      from,
+      to,
+      amount: {
+        asset_id: asset.id,
+        amount: parseInt(value * Math.pow(10, asset.precision))
+      },
+      memo,
+    };
+    let tr = new TransactionBuilder();
+    let op = tr.get_type_operation("override_transfer", transfer);
+    return await daemon.performProposalTransaction(tr, [op]);
+  }
+  async function post_custom(content) {
+    let { daemon } = this;
+    let transfer = {
+      fee: {
+        asset_id: "1.3.0",
+        amount: 0
+      },
+      payer: daemon.daemonAccountInfo.get("id"),
+      required_auths: [daemon.daemonAccountInfo.get("id")],
+      id: 1,
+      data: Uint8Array.from(new Buffer(content, "utf-8"))
+    };
+
+    let tr = new TransactionBuilder();
+    let op = tr.get_type_operation("custom", transfer);
+    return await daemon.performTransaction(tr, op);
+  }
+
+  async function translate(content) {
+    let bytes = [];
+    Array.prototype.forEach.call(content, (letter, i, a) => {
+      if (i % 2 === 0 && i !== a.length - 1) {
+        let b = `${letter}${a[i + 1] || ""}`;
+        bytes.push(parseInt(b, 16));
+      }
+    });
+    let str = Buffer.from(bytes).toString("utf-8");
+    return str;
+  }
+
+  async function getAccountId(nameOrId) {
+    if (isId(nameOrId)) {
+      return nameOrId;
+    } else {
+      return (await daemon.getAccountByName(nameOrId))["id"];
+    }
   }
 
   async function transfer(account, value, memo, asset = "1.3.0") {
@@ -839,7 +990,6 @@ async function main() {
       to_account = account;
     }
     let a = (await getAsset(asset))[0][0];
-    console.log("A: ", a);
     let tx = {
       to_account,
       amount: parseInt(value * Math.pow(10, a.precision)),
@@ -849,93 +999,49 @@ async function main() {
     return await daemon.performTransfer(tx);
   }
 
-  async function verifyAccountExist(file) {
-    let list = require(file);
-    assert(list && list.length);
-    let res = await Promise.all(list.map(l => getAccountByName(l)));
-    let final = res
-      .filter(account => !!account)
-      .map(account => account.name)
-      .sort();
-    fs.writeFileSync("./verify_result.json", JSON.stringify(final));
-    return final;
-
-    // let notExist = [];
-    // res.forEach((one, index) => (one.result == null ? notExist.push[res[index]["name"]] : 0));
-    // return notExist.length ? notExist : "All Currect!";
-  }
-
-  const MEMOS = ["SJInPuvqG", "S18gu_vcM", "Hk9tj88qG", "HyiosLI9G"];
-  async function testImpl(counter, amount = 20000) {
-    let { daemon } = this;
-    let tx = {
-      to_account: "1.2.38",
-      amount: amount + counter,
-      asset: "1.3.41",
-      memo:
-        "withdraw:CybexGatewayDev:ETH:0xbe79a5a868312f8EAfBCc2a24a10d6FCf501cE2D"
-    };
-    return await daemon.performTransfer(tx);
-  }
-  async function testGateway(amount = 100, interval = 200) {
-    let counter = 1;
-    let starter = Date.now();
-    let doTest = testImpl.bind(this);
-    (function doOnce(counter) {
-      doTest(counter)
-        // sendPrizeImpl(id, 66, `Prize`)
-        .then(res => console.log(`No.${counter} done`))
-        .catch(err => {
-          console.error("Failed: ", err);
-        });
-      if (counter < amount) {
-        setTimeout(() => {
-          doOnce(counter + 1);
-        }, interval);
-      } else {
-        let duration = (Date.now() - starter) / 1000;
-        console.log("Total: ", duration);
-      }
-    })(counter);
-  }
-
   async function genPub(accountName, seed) {
-    const role = ["active", "owner"];
+    const role = ["active", "owner", "memo"];
     const res = role.map(r => {
       const s = `${accountName}${r}${seed}`;
       console.log("Now Seed: ", s);
       let privKey = PrivateKey.fromSeed(s);
+      console.log("PrivateKey: ", privKey.toWif());
       let pubKey = privKey.toPublicKey().toPublicKeyString();
+      console.log("PrivateKey: ", pubKey);
       console.log("Address: ", privKey.toPublicKey().toAddressString());
       console.log("PTS Address: ", privKey.toPublicKey().toPtsAddy());
       return pubKey;
     });
     return res;
   }
+  async function genPubFromSeed(seed) {
+    const role = ["active", "owner", "memo"];
+    const s = seed;
+    console.log("Now Seed: ", s);
+    let privKey = PrivateKey.fromSeed(s);
+    console.log("PrivateKey: ", privKey.toWif());
+    let pubKey = privKey.toPublicKey().toPublicKeyString();
+    console.log("PrivateKey: ", pubKey);
+    console.log("Address: ", privKey.toPublicKey().toAddressString());
+    console.log("PTS Address: ", privKey.toPublicKey().toPtsAddy());
+    return pubKey;
+  }
 
   async function getAddressFromPub(pubKeyString) {
     const { key, PublicKey } = require("cybexjs");
 
-    let pubKey = PublicKey.fromPublicKeyString(
-      "CYB5bxCtbzMhTVxeep7iR5eKFq1MzgWFeyk8rExgdEXiowfAKSBhX",
-      "CYB"
-    );
-    console.log("PUBKEY: ", pubKey);
     let address = key.addresses(pubKeyString, "CYB");
 
     let bals = await daemon.Apis.instance()
       .db_api()
       .exec("get_balance_objects", [address]);
 
-    console.log("ADD: ", address);
     return bals;
   }
 
   const { correctMarketPair } = require("./utils/index");
 
-  async function benchVod() {
-    
-  }
+  async function benchVod() {}
 
   async function statVolume() {
     let { daemon } = this;
@@ -1085,6 +1191,22 @@ async function main() {
     return res;
   }
 
+  function signStr(str) {
+    let { string: strType } = types;
+    let toSign = strType.fromObject(str);
+    let privKey = PrivateKey.fromSeed("qwer1234qwer1234");
+    console.log("Private: ", privKey.toWif());
+    let msgType = new Serializer("msg", {
+      msg: strType
+    });
+    // let toSignObj = msgType.fromObject({ msg: str });
+    // let toSign = msgType.toBuffer(toSignObj);
+    console.log("Buffer: ", toSign);
+    let signer = Signature.signBuffer(toSign, privKey);
+    console.log("Gisit: ", signer.toBuffer());
+    return signer.toHex();
+  }
+
   function genAddress(seed) {
     assert(seed && seed.length > 12);
     let pub = PrivateKey.fromSeed(seed).toPublicKey();
@@ -1134,6 +1256,26 @@ async function main() {
     fs.writeFileSync("./cybex_has_send.json", JSON.stringify(res));
     return res;
   }
+
+  async function getVestingBalance(pubKey) {
+    let pub = PublicKey.fromPublicKeyString(pubKey, "CYB");
+    console.log("Pub: ", pub.toString());
+    // let addresses = key.addresses(pub);
+    let address_prefix = "CYB";
+    let a = Address.fromPublic(pub, false, 0).toString("CYB");
+    var address_string = [
+      Address.fromPublic(pub, false, 0).toString(address_prefix), // btc_uncompressed
+      Address.fromPublic(pub, true, 0).toString(address_prefix), // btc_compressed
+      Address.fromPublic(pub, false, 56).toString(address_prefix), // pts_uncompressed
+      Address.fromPublic(pub, true, 56).toString(address_prefix), // pts_compressed
+      pub.toAddressString(address_prefix) // bts_short, most recent format
+    ];
+    let bals = await daemon.Apis.instance()
+      .db_api()
+      .exec("get_balance_objects", [address_string]);
+    return { address_string, bals };
+  }
+
   async function statAccountTransferFromHistory(account, { daemon } = this) {
     let accountId;
     if (!isId(account)) {
@@ -1229,129 +1371,6 @@ async function main() {
       .exec("get_fill_order_history", [base, quote, limit]);
     // fs.writeFileSync("./rj.json", JSON.stringify(r));
     return r;
-  }
-
-  async function get24() {
-    let start = new Date("2018-04-24T07:10:00Z").valueOf();
-    let end = new Date("2018-04-24T07:13:00Z").valueOf();
-    let orders = await getFillOrder("1.3.0", "1.3.2", (limit = 30000));
-    const isValid = time => {
-      let timestamp = new Date(time + "Z").valueOf();
-      return timestamp >= start && timestamp <= end;
-    };
-    let _24 = orders.filter(order => isValid(order.time));
-    fs.writeFileSync("24.json", JSON.stringify(_24));
-  }
-
-  async function loadFillOrder(...args) {
-    const isValid = time => {
-      let timestamp = new Date(time + "Z").valueOf();
-      return timestamp >= 1524463200000 && timestamp <= 1524492000000
-        ? 1
-        : timestamp >= 1524492000000 && timestamp <= 1524578400000;
-      // ? 2
-      // : timestamp >= 1524636000000 && timestamp <= 1524664800000
-      //   ? 3
-      //   : 0;
-    };
-    let bots = (await Promise.all(
-      [
-        "rockets-2018",
-        "karl-malone",
-        "carmelo-anthony",
-        "sz-zhanxiaorong",
-        "polar-bear",
-        "huzp1980",
-        "jamesbond-007",
-        "ding-ding",
-        "sunminghui123",
-        "miaomiao-miao",
-        "milan-win2018",
-        "fin-3-acen",
-        "cz334455",
-        "shenl-01",
-        "nexu-jane",
-        "oo-55yie",
-        "stene-cui",
-        "wxx-1991",
-        "point-one",
-        "robin-hood"
-      ].map(getAccountByName)
-    )).map(a => a.id);
-
-    let file = `./outputs/fill/fill_${args.join("_")}_${Date.now()}.json`;
-    let validFile = `./outputs/fill/valid_${args.join("_")}_${Date.now()}.json`;
-    let resultFile = `./outputs/fill/result_${args.join(
-      "_"
-    )}_${Date.now()}.json`;
-    let sanitizeFile = `./outputs/fill/sum_${args.join(
-      "_"
-    )}_${Date.now()}.json`;
-    let orders = await getFillOrder(...args);
-    fs.writeFileSync(file, JSON.stringify(orders));
-    let sanitized = orders
-      .filter(order => bots.indexOf(order.op.account_id) === -1)
-      .reduce(
-        (sum, order) => {
-          let v = isValid(order.time);
-          if (!v) return sum;
-          let day = sum[v];
-          if (order.op.account_id in day) {
-            day[order.op.account_id].push({
-              time: order.time,
-              order_id: order.order_id
-            });
-          } else {
-            day[order.op.account_id] = [
-              {
-                time: order.time,
-                order_id: order.order_id
-              }
-            ];
-          }
-          sum["totalOf" + v] = Object.getOwnPropertyNames(day).length;
-          return sum;
-        },
-        { 1: {}, 2: {}, 3: {} }
-      );
-
-    fs.writeFileSync(sanitizeFile, JSON.stringify(sanitized));
-    let validList = [];
-
-    validList[1] = Object.getOwnPropertyNames(sanitized[1]).filter(
-      id => bots.indexOf(id) === -1
-    );
-    validList[2] = Object.getOwnPropertyNames(sanitized[2]).filter(
-      id => bots.indexOf(id) === -1
-    );
-    validList[3] = Object.getOwnPropertyNames(sanitized[3]).filter(
-      id => bots.indexOf(id) === -1
-    );
-    fs.writeFileSync(validFile, JSON.stringify(validList));
-
-    let result = [];
-    result[0] = (await Promise.all(
-      validList[1].map(id => getAccountInfo(id))
-    )).map(a => ({ id: a.id, name: a.name }));
-    result[1] = (await Promise.all(
-      validList[2].map(id => getAccountInfo(id))
-    )).map(a => ({ id: a.id, name: a.name }));
-    result[2] = (await Promise.all(
-      validList[3].map(id => getAccountInfo(id))
-    )).map(a => ({ id: a.id, name: a.name }));
-    fs.writeFileSync(resultFile, JSON.stringify(result));
-
-    return file;
-  }
-
-  async function removeDetails(file) {
-    assert(file);
-    let records = require(file);
-    console.log("Record:", records);
-    for (let record of records) {
-      delete record.details;
-    }
-    return records;
   }
 
   async function statRegister(_startBlock = 1, _endBlock) {
@@ -1552,7 +1571,11 @@ async function main() {
     for (let i = 0; i < count; i++) {
       let account = await getAccountFullInfo("1.2." + i);
       await new Promise(resolve => setTimeout(() => resolve()), interval);
-      console.log("Index: ", account[0][1].account.id, account[0][1].account.name);
+      console.log(
+        "Index: ",
+        account[0][1].account.id,
+        account[0][1].account.name
+      );
     }
   }
 
@@ -1831,9 +1854,13 @@ async function main() {
       return this.daemon.daemonAccountInfo;
     }),
     block: getPrintFn(getBlocks),
+    approve: getPrintFn(approve),
     get: getPrintFn(getObject),
     // Transactions
+    "create-limit-order": getPrintFn(createLimitOrder),
+    "cancel-limit-order": getPrintFn(cancelLimitOrder),
     "create-account": getPrintFn(createAccount),
+    "create-account-with-blocking": getPrintFn(createAccountWithBlocking),
     transfer: getPrintFn(transfer),
     ggd: getPrintFn(getGlobalDynamic),
     init: getPrintFn(initDaemon),
@@ -1849,8 +1876,13 @@ async function main() {
     fa: getPrintFn(findAccounts),
     // "send-prize": getPrintFn(sendCodeWinner),
     "check-balance": getPrintFn(checkAccountBalance),
+    // "override-transfer": getPrintFn(override),
+    "proposal-override-transfer": getPrintFn(proposalOverride),
     compare: getPrintFn(compareWithdrawOrder),
+    "withdraw-claim": getPrintFn(withdrawClaim),
+    "withdraw-create": getPrintFn(withdrawCreate),
     "gen-pub": getPrintFn(genPub),
+    "gen-pub-from-seed": getPrintFn(genPubFromSeed),
     "gen-address-from-pub": getPrintFn(getAddressFromPub),
     "gen-address": getPrintFn(genAddress),
     "get-db": getPrintFn(getDB),
@@ -1858,12 +1890,12 @@ async function main() {
     "get-account-count": getPrintFn(getAccountCount),
     "get-account-total-balance": getPrintFn(getAccountTotalBalance),
     "get-limits": getPrintFn(getLimitOrder),
-    "get-24": getPrintFn(get24),
+    "get-settle": getPrintFn(getSettleOrder),
     "setup-watcher": getPrintFn(setupWatcher),
     "watch-account": getPrintFn(watchAccount),
     "get-filled": getPrintFn(getFillOrder),
     "get-trade-history": getPrintFn(getTradeHistory),
-    "load-filled": getPrintFn(loadFillOrder),
+    "get-ticker": getPrintFn(getTicker),
     "top-buy": getPrintFn(topBuyLimits),
     "top-sell": getPrintFn(topSellLimits),
     "get-asset": getPrintFn(getAsset),
@@ -1871,23 +1903,31 @@ async function main() {
     "get-vol": getPrintFn(getVol),
     "get-latest-price": getPrintFn(getLatestPrice),
     "stat-vol": getPrintFn(statVolume),
-    "test-gateway": getPrintFn(testGateway),
     "test-create": getPrintFn(testCreateAccount),
     "stat-account": getPrintFn(statAccountTransfer),
     "stat-account-from-history": getPrintFn(statAccountTransferFromHistory),
     "stat-register": getPrintFn(statRegister),
+    "upgrade-account": getPrintFn(upgradeAccount),
+    "update-fee": getPrintFn(updateFee),
+    "post-custom": getPrintFn(post_custom),
     "stat-limit": getPrintFn(statLimit),
     "stat-deposit": getPrintFn(statDeposit),
     "stat-gateway-order": getPrintFn(statGatewayOrder),
+    "sign-str": getPrintFn(signStr),
     "sanitize-transfer": getPrintFn(sanitizeAccountTransfer),
+    "proposal-atom-transfer": getPrintFn(proposalAtomTransfer),
+    "proposal-call": getPrintFn(proposalCallOrder),
+    "decode-memo": getPrintFn(decodeMemoDemo),
     "update-feed-producer": getPrintFn(updateFeedProducer),
-    "verify-list": getPrintFn(verifyAccountExist),
     "find-block": getPrintFn(findBlockByTime),
+    "get-vesting": getPrintFn(getVestingBalance),
     "feed-price": getPrintFn(feedPrice),
+    "settle-global-asset": getPrintFn(settleAssetGlobal),
     "settle-asset": getPrintFn(settleAsset),
-    "remove-details": getPrintFn(removeDetails),
+    translate: getPrintFn(translate),
     sell: getPrintFn(sellAsset),
     sanitize: getPrintFn(sanitize),
+    "gen-name": getPrintFn(genNameSet),
     "create-committee": getPrintFn(createCommittee),
     "find-who-has": getPrintFn(findWhoHas),
     "read-wallet": getPrintFn(readWallet)

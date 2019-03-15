@@ -18,6 +18,53 @@ async function createAccount(accountName, seed) {
   let { daemon } = this;
   return await createAccountImpl.call(this, accountName, seed);
 }
+async function createAccountWithBlocking(accountName, seed) {
+  let { daemon } = this;
+  let res = await createAccountImpl.call(this, accountName, seed);
+  let opResult = res[0]["trx"]["operation_results"][0][1];
+  return await updateAccountWhitelist(
+    daemon.daemonAccountInfo.get("id"),
+    opResult,
+    2
+  );
+}
+
+async function updateAccountWhitelist(
+  authorizing_account,
+  account_to_list,
+  new_listing
+) {
+  let { daemon } = this;
+  let createParams = {
+    fee: {
+      amount: 0,
+      asset_id: 0
+    },
+    new_listing,
+    account_to_list,
+    authorizing_account
+  };
+
+  let tr = new TransactionBuilder();
+  let op = tr.get_type_operation("account_whitelist", createParams);
+  return await daemon.performTransaction(tr, op);
+}
+
+async function upgradeAccount(accountID) {
+  let { daemon } = this;
+  let createParams = {
+    fee: {
+      amount: 0,
+      asset_id: 0
+    },
+    account_to_upgrade: accountID,
+    upgrade_to_lifetime_member: true
+  };
+
+  let tr = new TransactionBuilder();
+  let op = tr.get_type_operation("account_upgrade", createParams);
+  return await daemon.performTransaction(tr, op);
+}
 
 async function createAccountImpl(
   name,
@@ -78,7 +125,7 @@ function genCode(size = 1, codeLength = 12) {
 }
 
 async function testCreateAccount(
-  times = 20,
+  times = 10,
   interval = 200,
   logPrefix = "res_create_account_" + Date.now()
 ) {
@@ -89,7 +136,6 @@ async function testCreateAccount(
   let res = [];
   let failedRes = [];
   (function testOnce(counter) {
-    console.log("COUnte: ", counter);
     let name = names[counter++];
     let seed = name + genCode();
     console.log(`${counter}, Creating account: ${name}, seed: ${seed}`);
@@ -120,5 +166,7 @@ async function testCreateAccount(
 
 module.exports = {
   createAccount,
+  createAccountWithBlocking,
+  upgradeAccount,
   testCreateAccount
 };

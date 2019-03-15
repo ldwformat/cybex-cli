@@ -2,7 +2,13 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const cybexjs_1 = require("cybexjs");
 const { Apis } = require("cybexjs-ws");
-const dict = require("./utils/dictionary_en.json").en;
+const dict = [];
+// const dict = require("./utils/dictionary_en.json")
+//   .en.split(",")
+//   .filter(word => word.length < 5);
+const dict1 = require("./utils/dick.json");
+
+const dicts = dict.concat(dict1);
 
 exports.getIndexSuffixdArray = strOrArray =>
   Array.isArray(strOrArray)
@@ -186,16 +192,18 @@ const getRandomLetter = (forceLetter = false) =>
   ).toString(36);
 
 const getValidNamePart = length =>
-  dict[Math.floor(Math.random() * dict.length)]
   // getRandomLetter(true) +
-  // new Array(length - 1)
-  //   .fill(1)
-  //   .map(getRandomLetter)
-  //   .join("");
+  (dicts)[Math.floor(Math.random() * dicts.length)];
+// new Array(length - 1)
+//   .fill(1)
+//   .map(getRandomLetter)
+//   .join("");
 const getRandomName = (nameLength = 8, spliterPos = 5) =>
   getValidNamePart(spliterPos) +
-  "-" +
-  getValidNamePart(nameLength - spliterPos - 1);
+  (Math.random() > 0.5 ? "-" : "") +
+  getValidNamePart(nameLength - spliterPos - 1) +
+  (Math.random() > 0.7 ? 1960 + Math.floor(Math.random() * 40) : "");
+
 const genNameSet = (size = 20, nameLength = 8) => {
   let set = new Set();
   while (set.size < size) {

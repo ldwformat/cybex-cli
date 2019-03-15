@@ -4,7 +4,7 @@
   "main": "CybexDaemon.js",
   "license": "MIT",
   "dependencies": {
-    "cybexjs": "^1.0.19",
+    "cybexjs": "^1.0.27",
     "cybexjs-ws": "^1.1.9",
     "lodash": "^4.17.4",
     "lzma": "^2.3.2",
