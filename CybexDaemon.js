@@ -216,7 +216,7 @@ class CybexDaemon extends events.EventEmitter {
       await tr.set_required_fees();
       const propose_options = {
         fee_paying_account: this.daemonAccountInfo.get("id"),
-        expiration_time: Math.ceil(Date.now() / 1000) + 600
+        expiration_time: Math.ceil(Date.now() / 1000) + 600 * 6
       };
       await tr.propose(propose_options);
       await tr.set_required_fees();

@@ -12,7 +12,8 @@ const {
   Serializer,
   types,
   Address,
-  key
+  key,
+  ops
 } = require("cybexjs");
 const { execSync } = require("child_process");
 const moment = require("moment");
@@ -247,6 +248,23 @@ async function getBlocks(start, numOfBlock = 1) {
     this.daemon.Apis.instance()
       .db_api()
       .exec("get_block", [blockNum])
+  );
+  let bs = await Promise.all(pArray);
+  return bs;
+}
+async function getBlockHeaders(start, numOfBlock = 1) {
+  console.log(`Get ${numOfBlock} blocks info from ` + start);
+  if (!numOfBlock || numOfBlock <= 0) {
+    throw Error("The num of block and start num must greater than 0!");
+  }
+  numOfBlock = parseInt(numOfBlock);
+  let numArray = new Array(numOfBlock)
+    .fill(1)
+    .map((v, i) => parseInt(start) + i);
+  let pArray = numArray.map(blockNum =>
+    this.daemon.Apis.instance()
+      .db_api()
+      .exec("get_block_header", [blockNum])
   );
   let bs = await Promise.all(pArray);
   return bs;
@@ -922,8 +940,15 @@ async function main() {
     console.log("Issuer: ", daemon.daemonAccountInfo.get("id"));
     let from = await getAccountId(_from);
     let to = await getAccountId(_to);
-    let memo = _memo ? await genMemo(daemon.daemonAccountInfo.get("id"), to, _memo, daemon.keyMap)  : undefined;
-    
+    let memo = _memo
+      ? await genMemo(
+          daemon.daemonAccountInfo.get("id"),
+          to,
+          _memo,
+          daemon.keyMap
+        )
+      : undefined;
+
     let transfer = {
       fee: {
         asset_id: "1.3.0",
@@ -937,7 +962,7 @@ async function main() {
         asset_id: asset.id,
         amount: parseInt(value * Math.pow(10, asset.precision))
       },
-      memo,
+      memo
     };
     let tr = new TransactionBuilder();
     let op = tr.get_type_operation("override_transfer", transfer);
@@ -954,6 +979,70 @@ async function main() {
       required_auths: [daemon.daemonAccountInfo.get("id")],
       id: 1,
       data: Uint8Array.from(new Buffer(content, "utf-8"))
+    };
+
+    let tr = new TransactionBuilder();
+    let op = tr.get_type_operation("custom", transfer);
+    return await daemon.performTransaction(tr, op);
+  }
+  async function addCustomEvent() {
+    let { daemon } = this;
+
+    let eventItem = new Serializer("event_item", {
+      type: types.uint8,
+      weight: types.uint32,
+      description: types.string,
+      meta: types.string
+    });
+    let createEvent = new Serializer("new_lottery_event", {
+      magic: types.string,
+      start: types.time_point_sec,
+      end: types.time_point_sec,
+      casher: types.protocol_id_type("account"),
+      amount: ops.asset,
+      item: types.array(eventItem)
+    });
+    let start = new Date();
+    let end = new Date(Date.now() + 3600 * 1000 * 2);
+    console.log("Start: ", start, end);
+    let realEvent = {
+      magic: "cybex-lottery",
+      start,
+      end,
+      casher: "1.2.25",
+      amount: { asset_id: "1.3.0", amount: 100000 },
+      item: [
+        {
+          type: 0,
+          weight: 80,
+          description: "谢谢惠顾",
+          meta: "随便的信息"
+        },
+        {
+          type: 1,
+          weight: 10,
+          description: "Iphone 3GS",
+          meta: "随便的信息"
+        },
+        {
+          type: 2,
+          weight: 10,
+          description: "这个也有奖，实物",
+          meta: "随便的信息"
+        }
+      ]
+    };
+    console.log("New Event: ", createEvent.toObject(realEvent))
+    let transfer = {
+      fee: {
+        asset_id: "1.3.0",
+        amount: 0
+      },
+      payer: daemon.daemonAccountInfo.get("id"),
+      required_auths: [daemon.daemonAccountInfo.get("id")],
+      id: 1,
+      data: createEvent.toBuffer(realEvent)
+      // data: Uint8Array.from(new Buffer(content, "utf-8"))
     };
 
     let tr = new TransactionBuilder();
@@ -1854,6 +1943,7 @@ async function main() {
       return this.daemon.daemonAccountInfo;
     }),
     block: getPrintFn(getBlocks),
+    header: getPrintFn(getBlockHeaders),
     approve: getPrintFn(approve),
     get: getPrintFn(getObject),
     // Transactions
@@ -1910,6 +2000,7 @@ async function main() {
     "upgrade-account": getPrintFn(upgradeAccount),
     "update-fee": getPrintFn(updateFee),
     "post-custom": getPrintFn(post_custom),
+    "add-custom": getPrintFn(addCustomEvent),
     "stat-limit": getPrintFn(statLimit),
     "stat-deposit": getPrintFn(statDeposit),
     "stat-gateway-order": getPrintFn(statGatewayOrder),
