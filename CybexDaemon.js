@@ -173,14 +173,13 @@ class CybexDaemon extends events.EventEmitter {
       tr.add_operation(op);
       await tr.set_required_fees();
       await tr.update_head_block();
-      console.log("TrBuffer: ");
-      console.log(tr.tr_buffer);
       if (this.mode === KEY_MODE.PASSWORD) {
         loginInstance.signTransaction(tr);
       } else {
         tr.add_signer(this.privKey);
       }
       let retry = 0;
+      console.log("TR:", tr);
       try {
         return await tr.broadcast();
       } catch (e) {

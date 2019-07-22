@@ -13,7 +13,8 @@ const {
   types,
   Address,
   key,
-  ops
+  ops,
+  hash
 } = require("cybexjs");
 const { execSync } = require("child_process");
 const moment = require("moment");
@@ -213,6 +214,78 @@ async function getAccountFullHistory(accountId, numOfRecord, daemon) {
   } while (then.length);
   return res;
 }
+async function getAllTx(
+  account = "1.2.4733",
+  fileName = "all",
+  startBlock = 170002
+) {
+  let res = await getAccountInfo(account, this);
+  let id = res.id;
+  let startB = startBlock;
+  let file = "./outputs/all_" + account + "_" + fileName + ".json";
+
+  assert(id);
+  while (true) {
+    let block = await getBlock(startB++, this);
+
+    if (!block) {
+      break;
+    }
+    if (block.blockNum % 2000 == 0) {
+      console.log("Block: ", block);
+    }
+    let requireBlock = {
+      ...block,
+      transactions: block.transactions.filter(
+        tx =>
+          tx.operations[0][0] === 0 &&
+          (tx.operations[0][1].from === "1.2.4733" ||
+            tx.operations[0][1].to === "1.2.4733")
+      )
+    };
+    if (requireBlock.transactions.length) {
+      fs.writeFileSync(file, JSON.stringify(requireBlock) + "\n", {
+        flag: "a+"
+      });
+    }
+  }
+
+  return res;
+}
+async function drawAllTx(account = "1.2.4733", startBlock = 170002) {
+  let res = await getAccountInfo(account, this);
+  let id = res.id;
+  let startB = startBlock;
+  let file = "./outputs/all_" + account + "_" + fileName + ".json";
+
+  assert(id);
+  while (true) {
+    let block = await getBlock(startB++, this);
+
+    if (!block) {
+      break;
+    }
+    if (block.blockNum % 2000 == 0) {
+      console.log("Block: ", block);
+    }
+    let requireBlock = {
+      ...block,
+      transactions: block.transactions.filter(
+        tx =>
+          tx.operations[0][0] === 0 &&
+          (tx.operations[0][1].from === "1.2.4733" ||
+            tx.operations[0][1].to === "1.2.4733")
+      )
+    };
+    if (requireBlock.transactions.length) {
+      fs.writeFileSync(file, JSON.stringify(requireBlock) + "\n", {
+        flag: "a+"
+      });
+    }
+  }
+
+  return res;
+}
 
 async function getObject(id = "1.1.1", ...args) {
   console.log(`Get object ${id}`);
@@ -224,15 +297,24 @@ async function getObject(id = "1.1.1", ...args) {
 let blocks = {};
 
 async function getBlock(blockNum, { daemon } = this) {
-  if (!blocks[blockNum]) {
-    blocks[blockNum] = {
-      ...(await daemon.Apis.instance()
-        .db_api()
-        .exec("get_block", [blockNum])),
-      blockNum
-    };
-  }
-  return blocks[blockNum];
+  // if (!blocks[blockNum]) {
+  return {
+    ...(await daemon.Apis.instance()
+      .db_api()
+      .exec("get_block", [blockNum])),
+    blockNum
+  };
+  // }
+  // return blocks[blockNum];
+  // if (!blocks[blockNum]) {
+  //   blocks[blockNum] = {
+  //     ...(await daemon.Apis.instance()
+  //       .db_api()
+  //       .exec("get_block", [blockNum])),
+  //     blockNum
+  //   };
+  // }
+  // return blocks[blockNum];
 }
 
 async function getBlocks(start, numOfBlock = 1) {
@@ -309,7 +391,7 @@ async function findBlockByTime(_targetTime, _startBlock, _endBlock) {
   let interval = (await daemon.Apis.instance()
     .db_api()
     .exec("get_objects", [["2.0.0"]]))[0].parameters.block_interval;
-  console.log("Block");
+  console.log("Block", headBlock);
   if (targetTime.valueOf() > new Date().valueOf()) {
     let blocksAmount = Math.floor(
       (targetTime.valueOf() - new Date().valueOf()) / interval / 1000
@@ -994,45 +1076,53 @@ async function main() {
       description: types.string,
       meta: types.string
     });
-    let createEvent = new Serializer("new_lottery_event", {
-      magic: types.string,
+    let createMagic = new Serializer("new_lottery_event", {
       start: types.time_point_sec,
       end: types.time_point_sec,
       casher: types.protocol_id_type("account"),
       amount: ops.asset,
       item: types.array(eventItem)
     });
+    let magicConfig = new Serializer("new_lottery_event", {
+      magic: types.string,
+      op: types.static_variant([createMagic])
+    });
     let start = new Date();
     let end = new Date(Date.now() + 3600 * 1000 * 2);
     console.log("Start: ", start, end);
     let realEvent = {
       magic: "cybex-lottery",
-      start,
-      end,
-      casher: "1.2.25",
-      amount: { asset_id: "1.3.0", amount: 100000 },
-      item: [
+      op: [
+        0,
         {
-          type: 0,
-          weight: 80,
-          description: "谢谢惠顾",
-          meta: "随便的信息"
-        },
-        {
-          type: 1,
-          weight: 10,
-          description: "Iphone 3GS",
-          meta: "随便的信息"
-        },
-        {
-          type: 2,
-          weight: 10,
-          description: "这个也有奖，实物",
-          meta: "随便的信息"
+          start,
+          end,
+          casher: "1.2.20",
+          amount: { asset_id: "1.3.0", amount: 100000 },
+          item: [
+            {
+              type: 0,
+              weight: 80,
+              description: Buffer.from("谢谢惠顾", "utf8"),
+              meta: Buffer.from("随便的信息", "utf-8")
+            },
+            {
+              type: 1,
+              weight: 10,
+              description: Buffer.from("Iphone 3GS", "utf-8"),
+              meta: Buffer.from("随便的信息", "utf-8")
+            },
+            {
+              type: 2,
+              weight: 10,
+              description: Buffer.from("这个也有奖，实物", "utf-8"),
+              meta: Buffer.from("随便的信息", "utf-8")
+            }
+          ]
         }
       ]
     };
-    console.log("New Event: ", createEvent.toObject(realEvent))
+    console.log("New Event: ", magicConfig.toObject(realEvent));
     let transfer = {
       fee: {
         asset_id: "1.3.0",
@@ -1041,8 +1131,7 @@ async function main() {
       payer: daemon.daemonAccountInfo.get("id"),
       required_auths: [daemon.daemonAccountInfo.get("id")],
       id: 1,
-      data: createEvent.toBuffer(realEvent)
-      // data: Uint8Array.from(new Buffer(content, "utf-8"))
+      data: magicConfig.toBuffer(realEvent)
     };
 
     let tr = new TransactionBuilder();
@@ -1070,7 +1159,7 @@ async function main() {
     }
   }
 
-  async function transfer(account, value, memo, asset = "1.3.0") {
+  async function transfer(account, value, asset = "1.3.0", memo) {
     let { daemon } = this;
     let to_account;
     if (!isId(account)) {
@@ -1932,6 +2021,10 @@ async function main() {
     );
   }
 
+  function sha256(str) {
+    return hash.sha256(str).toString("hex");
+  }
+
   const commands = {
     // Explorer
     "get-account": getPrintFn(getAccountInfo, "getAccount"),
@@ -1946,6 +2039,7 @@ async function main() {
     header: getPrintFn(getBlockHeaders),
     approve: getPrintFn(approve),
     get: getPrintFn(getObject),
+    sha256: getPrintFn(sha256),
     // Transactions
     "create-limit-order": getPrintFn(createLimitOrder),
     "cancel-limit-order": getPrintFn(cancelLimitOrder),
@@ -1970,6 +2064,8 @@ async function main() {
     "proposal-override-transfer": getPrintFn(proposalOverride),
     compare: getPrintFn(compareWithdrawOrder),
     "withdraw-claim": getPrintFn(withdrawClaim),
+    "get-all-tx": getPrintFn(getAllTx),
+    "get-block": getPrintFn(getBlock),
     "withdraw-create": getPrintFn(withdrawCreate),
     "gen-pub": getPrintFn(genPub),
     "gen-pub-from-seed": getPrintFn(genPubFromSeed),
