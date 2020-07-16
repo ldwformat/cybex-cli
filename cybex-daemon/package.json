@@ -5,6 +5,6 @@
   "license": "MIT",
   "dependencies": {
     "cybexjs": "^1.0.15",
-    "lodash": "^4.17.4"
+    "lodash": "^4.17.19"
   }
 }
